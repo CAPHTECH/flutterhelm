@@ -1,0 +1,12 @@
+{
+  "id": "docs-site-build",
+  "mode": "software",
+  "tags": ["smoke"],
+  "input": {
+    "checks": ["mkdocs-build", "readme-nav-links", "phase0-server-smoke"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": ["check:mkdocs-build:ok", "check:phase0-server-smoke:ok", "summary:docs-site-build"]
+  }
+}

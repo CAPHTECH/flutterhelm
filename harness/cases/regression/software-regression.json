@@ -1,0 +1,12 @@
+{
+  "id": "phase0-sprint1-alignment",
+  "mode": "software",
+  "tags": ["regression"],
+  "input": {
+    "checks": ["phase0-foundation", "sprint1-minimum", "core-principles"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": ["check:phase0-foundation:ok", "check:sprint1-minimum:ok", "summary:phase0-sprint1-alignment"]
+  }
+}

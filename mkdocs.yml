@@ -3,23 +3,23 @@ site_description: Design documents for FlutterHelm, an agent-safe orchestration 
 theme:
   name: mkdocs
 nav:
-  - Overview: docs/index.md
-  - Design Basis: docs/00-design-basis.md
-  - Product Brief: docs/01-product-brief.md
-  - PRD: docs/02-prd.md
-  - Architecture: docs/03-architecture.md
-  - MCP Contract: docs/04-mcp-contract.md
-  - Session and Resources: docs/05-session-and-resources.md
-  - Security and Safety: docs/06-security-and-safety.md
-  - Roadmap: docs/07-roadmap.md
-  - Open Questions: docs/08-open-questions.md
-  - Implementation Plan: docs/09-implementation-plan.md
+  - Overview: index.md
+  - Design Basis: 00-design-basis.md
+  - Product Brief: 01-product-brief.md
+  - PRD: 02-prd.md
+  - Architecture: 03-architecture.md
+  - MCP Contract: 04-mcp-contract.md
+  - Session and Resources: 05-session-and-resources.md
+  - Security and Safety: 06-security-and-safety.md
+  - Roadmap: 07-roadmap.md
+  - Open Questions: 08-open-questions.md
+  - Implementation Plan: 09-implementation-plan.md
   - ADRs:
-      - ADR-001 Positioning: docs/adrs/ADR-001-positioning.md
-      - ADR-002 Transport and Roots: docs/adrs/ADR-002-transport-roots.md
-      - ADR-003 Resource-first Artifacts: docs/adrs/ADR-003-resource-first-artifacts.md
-      - ADR-004 Optional UI Driver: docs/adrs/ADR-004-optional-ui-driver.md
-  - References: docs/references.md
+      - ADR-001 Positioning: adrs/ADR-001-positioning.md
+      - ADR-002 Transport and Roots: adrs/ADR-002-transport-roots.md
+      - ADR-003 Resource-first Artifacts: adrs/ADR-003-resource-first-artifacts.md
+      - ADR-004 Optional UI Driver: adrs/ADR-004-optional-ui-driver.md
+  - References: references.md
 markdown_extensions:
   - admonition
   - tables

@@ -1,0 +1,24 @@
+{
+  "profile": "hybrid",
+  "targets": {
+    "software": {
+      "command": "node dist/targets/docs-contract.js"
+    },
+    "agentEval": {
+      "command": "node dist/targets/docs-qa.js"
+    }
+  },
+  "artifacts": {
+    "reportsDir": "reports",
+    "tracesDir": "traces"
+  },
+  "matrix": {
+    "os": [
+      "ubuntu-latest"
+    ],
+    "node": [
+      "20",
+      "22"
+    ]
+  }
+}

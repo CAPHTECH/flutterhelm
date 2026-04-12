@@ -16,10 +16,22 @@ FlutterHelm は、これらを置き換えるものではありません。
 ## ステータス
 
 - 状態: **Design proposal**
+- 実装: **Phase 0 core is available in this repository**
 - 実装前提: MCP client は最低でも **Tools** と **Resources** を扱えること
 - 推奨: **Roots** を扱えること
 - 初期 transport: **stdio-first**
 - 主要スコープ: Flutter ローカル開発、実行中アプリの観測、テスト、profiling、限定的な runtime interaction
+
+現在コードで実装されているのは Phase 0 の最小面です。
+
+- `workspace_show`
+- `workspace_set_root`
+- `session_open`
+- `session_list`
+- `serverInfo` / capability negotiation
+
+未実装の launcher / runtime diagnostics / tests / profiling / native bridge は、設計どおり次フェーズの対象です。
+Session persistence もまだ入っておらず、現在の session は process lifetime のみで保持されます。
 
 ## なぜ別レイヤが必要か
 
@@ -99,7 +111,44 @@ enabledWorkflows:
 }
 ```
 
+## ローカル実行
+
+```bash
+mise trust
+mise install
+mise exec -- dart pub get
+mise exec -- dart analyze
+mise exec -- dart test
+mise exec -- dart run bin/flutterhelm.dart serve
+```
+
+config/state の既定配置は `~/.config/flutterhelm/` です。
+
+- `config.yaml`
+- `state.json`
+- `audit.jsonl`
+
+必要なら `--config` と `--state-dir` で上書きできます。
+
 ## 命名の意図
 
 `Helm` は「舵輪」「操舵」を意味します。  
 FlutterHelm は、Flutter 開発フローをエージェントが**暴走せずに操舵する**ことを目指す名前です。
+
+## Harness
+
+この repo には、design contract を実行可能な形で検証する self-contained な harness があります。
+
+```bash
+npm --prefix harness install
+npm --prefix harness run bootstrap
+npm --prefix harness run validate
+npm --prefix harness run smoke
+npm --prefix harness run contracts
+npm --prefix harness run qa
+```
+
+`bootstrap` は `harness/.venv-docs` に MkDocs を導入するため、global な `mkdocs` install は不要です。  
+Phase 0 implementation checks を含む `smoke` / `contracts` を回す前に `mise trust && mise install && mise exec -- dart pub get` を済ませてください。  
+report は `harness/reports/`、QA trace は `harness/traces/` に残ります。
+`pull_request` では `smoke` を gate にし、拡張 contract は `contracts` または `workflow_dispatch` で回します。

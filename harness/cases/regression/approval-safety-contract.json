@@ -1,0 +1,12 @@
+{
+  "id": "approval-safety-contract",
+  "mode": "software",
+  "tags": ["regression"],
+  "input": {
+    "checks": ["approval-contract", "safety-root-fallback"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": ["check:approval-contract:ok", "check:safety-root-fallback:ok", "summary:approval-safety-contract"]
+  }
+}

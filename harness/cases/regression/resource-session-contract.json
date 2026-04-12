@@ -1,0 +1,12 @@
+{
+  "id": "resource-session-contract",
+  "mode": "software",
+  "tags": ["regression"],
+  "input": {
+    "checks": ["session-contract", "resource-uri-contract", "resource-metadata-retention"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": ["check:session-contract:ok", "check:resource-uri-contract:ok", "summary:resource-session-contract"]
+  }
+}

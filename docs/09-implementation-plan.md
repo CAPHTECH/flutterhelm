@@ -199,6 +199,18 @@ adapters:
     enabled: false
 ```
 
+### Phase 0 runtime paths
+
+Phase 0 の実装では mutable state を repo 外へ逃がします。
+
+- default config path: `~/.config/flutterhelm/config.yaml`
+- default state path: `~/.config/flutterhelm/state.json`
+- default audit log path: `~/.config/flutterhelm/audit.jsonl`
+- override: `--config`, `--state-dir`, `FLUTTERHELM_CONFIG_PATH`, `FLUTTERHELM_STATE_DIR`
+
+なお、Phase 0 で永続化されるのは active root と audit log のみです。  
+session は process lifetime の in-memory store に留めます。
+
 ## 5. First sprint plan
 
 ### Sprint 1

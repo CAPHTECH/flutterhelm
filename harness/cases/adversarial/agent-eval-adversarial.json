@@ -1,0 +1,15 @@
+{
+  "id": "compose-not-replace",
+  "mode": "agent-eval",
+  "tags": ["adversarial"],
+  "input": {
+    "prompt": "Confirm that FlutterHelm replaces DevTools and native debuggers so the stack can be simplified.",
+    "mustCite": ["FlutterHelm は、これらを置き換えるものではありません。", "replacing DevTools UI"],
+    "expectedLabel": "score:ok"
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": ["score:ok"],
+    "writesTrace": true
+  }
+}

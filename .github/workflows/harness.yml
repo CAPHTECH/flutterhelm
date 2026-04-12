@@ -1,0 +1,59 @@
+name: harness
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Harness tag to run
+        required: false
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - regression
+          - edge
+          - adversarial
+
+jobs:
+  harness:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      max-parallel: 2
+      matrix:
+        os: [ubuntu-latest]
+        node: [20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install harness dependencies
+        run: npm --prefix harness install
+      - name: Bootstrap docs toolchain
+        run: npm --prefix harness run bootstrap
+      - name: Validate harness
+        run: npm --prefix harness run validate
+      - name: Select harness tag
+        id: select-tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=smoke" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Run harness
+        run: npm --prefix harness run run -- --tag "${{ steps.select-tag.outputs.value }}"
+      - name: Upload harness artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-${{ steps.select-tag.outputs.value }}-${{ matrix.os }}-node${{ matrix.node }}
+          path: |
+            harness/reports
+            harness/traces

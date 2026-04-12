@@ -1,0 +1,12 @@
+{
+  "id": "workflow-tool-risk-alignment",
+  "mode": "software",
+  "tags": ["regression"],
+  "input": {
+    "checks": ["workflow-groups", "tool-risk-catalog"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": ["check:workflow-groups:ok", "check:tool-risk-catalog:ok", "summary:workflow-tool-risk-alignment"]
+  }
+}

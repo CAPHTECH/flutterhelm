@@ -1,0 +1,15 @@
+{
+  "id": "first-checkpoint-answer",
+  "mode": "agent-eval",
+  "tags": ["edge"],
+  "input": {
+    "prompt": "What is the first checkpoint for FlutterHelm?",
+    "mustCite": ["Phase 0 — Foundation", "### Sprint 1"],
+    "expectedLabel": "edge-ok"
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": ["edge-ok"],
+    "writesTrace": true
+  }
+}

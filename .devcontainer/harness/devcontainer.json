@@ -1,0 +1,17 @@
+{
+  "name": "FlutterHelm Harness",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-20-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.11"
+    }
+  },
+  "postCreateCommand": "npm --prefix harness install && npm --prefix harness run bootstrap",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "typescript.tsdk": "harness/node_modules/typescript/lib"
+      }
+    }
+  }
+}
