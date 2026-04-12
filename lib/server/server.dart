@@ -2,17 +2,23 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/artifacts/resources.dart';
 import 'package:flutterhelm/config/config.dart';
+import 'package:flutterhelm/launcher/tools.dart';
 import 'package:flutterhelm/policies/audit.dart';
 import 'package:flutterhelm/policies/risk.dart';
 import 'package:flutterhelm/policies/roots.dart';
+import 'package:flutterhelm/runtime/tools.dart';
 import 'package:flutterhelm/server/capabilities.dart';
 import 'package:flutterhelm/server/errors.dart';
 import 'package:flutterhelm/server/registry.dart';
 import 'package:flutterhelm/sessions/session.dart';
 import 'package:flutterhelm/sessions/session_store.dart';
+import 'package:flutterhelm/tests/tools.dart';
+import 'package:flutterhelm/utils/process_runner.dart';
 import 'package:flutterhelm/version.dart';
+import 'package:flutterhelm/workspace/tools.dart';
 
 class FlutterHelmServer {
   FlutterHelmServer._({
@@ -22,8 +28,14 @@ class FlutterHelmServer {
     required this.auditLogger,
     required this.rootPolicy,
     required this.toolRegistry,
+    required this.artifactStore,
     required this.resourceCatalog,
     required this.sessionStore,
+    required this.processRunner,
+    required this.workspaceTools,
+    required this.launcherTools,
+    required this.runtimeTools,
+    required this.testTools,
     required String logLevel,
     required ServerState state,
   }) : _logLevel = logLevel,
@@ -35,8 +47,14 @@ class FlutterHelmServer {
   final AuditLogger auditLogger;
   final RootPolicy rootPolicy;
   final ToolRegistry toolRegistry;
+  final ArtifactStore artifactStore;
   final ResourceCatalog resourceCatalog;
   final SessionStore sessionStore;
+  final ProcessRunner processRunner;
+  final WorkspaceToolService workspaceTools;
+  final LauncherToolService launcherTools;
+  final RuntimeToolService runtimeTools;
+  final TestToolService testTools;
   final String _logLevel;
 
   ServerState _state;
@@ -60,6 +78,9 @@ class FlutterHelmServer {
     final state = await stateRepository.load();
     final allowRootFallback =
         allowRootFallbackFlag || config.fallbacks.allowRootFallback;
+    final artifactStore = ArtifactStore(stateDir: runtimePaths.stateDir);
+    final sessionStore = await SessionStore.create(stateDir: runtimePaths.stateDir);
+    final processRunner = const ProcessRunner();
 
     return FlutterHelmServer._(
       runtimePaths: runtimePaths,
@@ -68,8 +89,29 @@ class FlutterHelmServer {
       auditLogger: AuditLogger(runtimePaths.auditFilePath),
       rootPolicy: RootPolicy(allowRootFallback: allowRootFallback),
       toolRegistry: ToolRegistry(),
-      resourceCatalog: const ResourceCatalog(),
-      sessionStore: SessionStore(),
+      artifactStore: artifactStore,
+      resourceCatalog: ResourceCatalog(artifactStore: artifactStore),
+      sessionStore: sessionStore,
+      processRunner: processRunner,
+      workspaceTools: WorkspaceToolService(
+        processRunner: processRunner,
+        flutterExecutable: config.adapters.flutterExecutable,
+      ),
+      launcherTools: LauncherToolService(
+        processRunner: processRunner,
+        sessionStore: sessionStore,
+        artifactStore: artifactStore,
+        flutterExecutable: config.adapters.flutterExecutable,
+      ),
+      runtimeTools: RuntimeToolService(
+        sessionStore: sessionStore,
+        artifactStore: artifactStore,
+      ),
+      testTools: TestToolService(
+        processRunner: processRunner,
+        artifactStore: artifactStore,
+        flutterExecutable: config.adapters.flutterExecutable,
+      ),
       logLevel: logLevel,
       state: state,
     );
@@ -241,13 +283,13 @@ class FlutterHelmServer {
         case 'resources/list':
           _ensureInitialized();
           final rootsSnapshot = await _currentRootSnapshot();
-          final resources = resourceCatalog
-              .listResources(
-                config: config,
-                state: _state,
-                rootSnapshot: rootsSnapshot,
-                sessions: sessionStore.listActiveSessions(),
-              )
+          final listedResources = await resourceCatalog.listResources(
+            config: config,
+            state: _state,
+            rootSnapshot: rootsSnapshot,
+            sessions: sessionStore.listActiveSessions(),
+          );
+          final resources = listedResources
               .map((ResourceDescriptor resource) => resource.toJson())
               .toList();
           _sendResult(id, <String, Object?>{'resources': resources});
@@ -266,7 +308,7 @@ class FlutterHelmServer {
           final session = sessionId == null
               ? null
               : sessionStore.getById(sessionId);
-          final resource = resourceCatalog.readResource(
+          final resource = await resourceCatalog.readResource(
             uri: uri,
             config: config,
             state: _state,
@@ -346,7 +388,7 @@ class FlutterHelmServer {
         'version': flutterHelmVersion,
       },
       'instructions':
-          'Phase 0 server: workspace/session contract only. Use resources for config:// and session:// payloads.',
+          'Phase 1 server: use tools for workspace/run/test orchestration and resources for logs, widget trees, runtime errors, and reports.',
     };
   }
 
@@ -356,9 +398,22 @@ class FlutterHelmServer {
   ) async {
     try {
       switch (definition.name) {
+        case 'workspace_discover':
+          final snapshot = await _currentRootSnapshot();
+          final roots = <String>{
+            ...snapshot.clientRoots,
+            ...snapshot.configuredRoots,
+            if (snapshot.activeRoot != null) snapshot.activeRoot!,
+          }.toList()
+            ..sort();
+          final workspaces = await workspaceTools.discoverWorkspaces(roots: roots);
+          return _toolSuccessResult(
+            summary: '${workspaces.length} workspace(s) discovered.',
+            structuredContent: <String, Object?>{'workspaces': workspaces},
+          );
         case 'workspace_show':
           final snapshot = await _currentRootSnapshot();
-          final resources = resourceCatalog.listResources(
+          final resources = await resourceCatalog.listResources(
             config: config,
             state: _state,
             rootSnapshot: snapshot,
@@ -371,7 +426,7 @@ class FlutterHelmServer {
             'activeRoot': _state.activeRoot,
             'defaults': config.defaults.toJson(),
             'configuredWorkflows': config.enabledWorkflows,
-            'implementedWorkflows': <String>['workspace', 'session'],
+            'implementedWorkflows': _implementedWorkflows(),
             'resources': resources
                 .where(
                   (ResourceDescriptor resource) =>
@@ -413,6 +468,12 @@ class FlutterHelmServer {
             ),
           );
           final snapshot = await _currentRootSnapshot();
+          final resources = await resourceCatalog.listResources(
+            config: config,
+            state: _state,
+            rootSnapshot: snapshot,
+            sessions: sessionStore.listActiveSessions(),
+          );
           return _toolSuccessResult(
             summary: 'Active root set to $canonicalRoot',
             structuredContent: <String, Object?>{
@@ -423,19 +484,56 @@ class FlutterHelmServer {
               'activeRoot': _state.activeRoot,
             },
             resourceLinks: <Map<String, Object?>>[
-              resourceCatalog
-                  .listResources(
-                    config: config,
-                    state: _state,
-                    rootSnapshot: snapshot,
-                    sessions: sessionStore.listActiveSessions(),
-                  )
+              resources
                   .firstWhere(
                     (ResourceDescriptor resource) =>
                         resource.uri == 'config://workspace/current',
                   )
                   .toResourceLink(),
             ],
+          );
+        case 'analyze_project':
+          final workspaceRoot = await _resolveWorkspaceRoot(
+            arguments['workspaceRoot'] as String?,
+          );
+          final analysis = await workspaceTools.analyzeProject(
+            workspaceRoot: workspaceRoot,
+            fatalInfos: arguments['fatalInfos'] as bool? ?? false,
+            fatalWarnings: arguments['fatalWarnings'] as bool? ?? true,
+          );
+          return _toolSuccessResult(
+            summary: 'Static analysis completed with ${analysis['issueCount']} issue(s).',
+            structuredContent: analysis,
+          );
+        case 'resolve_symbol':
+          final workspaceRoot = await _resolveWorkspaceRoot(
+            arguments['workspaceRoot'] as String?,
+          );
+          final symbol = _requiredString(arguments['symbol'], 'symbol');
+          final resolution = await workspaceTools.resolveSymbol(
+            workspaceRoot: workspaceRoot,
+            symbol: symbol,
+          );
+          final matches = _asList(resolution['matches']);
+          return _toolSuccessResult(
+            summary: matches.isEmpty
+                ? 'No symbol match found for $symbol.'
+                : '${matches.length} symbol match(es) found for $symbol.',
+            structuredContent: resolution,
+          );
+        case 'format_files':
+          final workspaceRoot = await _resolveWorkspaceRoot(
+            arguments['workspaceRoot'] as String?,
+          );
+          final paths = _asStringList(arguments['paths']);
+          final formatResult = await workspaceTools.formatFiles(
+            workspaceRoot: workspaceRoot,
+            paths: paths,
+            lineLength: arguments['lineLength'] as int?,
+          );
+          return _toolSuccessResult(
+            summary: 'Formatting completed for ${paths.length} path(s).',
+            structuredContent: formatResult,
           );
         case 'session_open':
           final clientRoots = await _getClientRoots();
@@ -464,13 +562,14 @@ class FlutterHelmServer {
             mode: mode,
             flavor: flavor,
           );
-          final descriptor = resourceCatalog
+          final resources = await resourceCatalog
               .listResources(
                 config: config,
                 state: _state,
                 rootSnapshot: await _currentRootSnapshot(),
                 sessions: sessionStore.listActiveSessions(),
-              )
+              );
+          final descriptor = resources
               .firstWhere(
                 (ResourceDescriptor resource) =>
                     resource.uri == 'session://${session.sessionId}/summary',
@@ -490,11 +589,175 @@ class FlutterHelmServer {
                   .toList(),
             },
           );
+        case 'device_list':
+          final devices = await launcherTools.listDevices();
+          return _toolSuccessResult(
+            summary: '${devices.length} device(s) available.',
+            structuredContent: <String, Object?>{'devices': devices},
+          );
+        case 'run_app':
+          final workspaceRoot = await _resolveWorkspaceRoot(
+            arguments['workspaceRoot'] as String?,
+          );
+          final target = (arguments['target'] as String?) ?? config.defaults.target;
+          final flavor = arguments['flavor'] as String?;
+          final mode = (arguments['mode'] as String?) ?? config.defaults.mode;
+          final platform = _requiredString(arguments['platform'], 'platform');
+          final session = await launcherTools.runApp(
+            workspaceRoot: workspaceRoot,
+            target: target,
+            platform: platform,
+            mode: mode,
+            flavor: flavor,
+            dartDefines: _asStringList(arguments['dartDefines']),
+            deviceId: arguments['deviceId'] as String?,
+            sessionId: arguments['sessionId'] as String?,
+          );
+          return _toolSuccessResult(
+            summary: 'App session ${session.sessionId} is ${session.state.wireName}.',
+            structuredContent: <String, Object?>{
+              ...session.toJson(),
+              'resources': <Map<String, Object?>>[
+                <String, Object?>{
+                  'uri': 'session://${session.sessionId}/summary',
+                  'mimeType': 'application/json',
+                  'title': 'Session summary',
+                },
+                <String, Object?>{
+                  'uri': artifactStore.sessionLogUri(session.sessionId, 'stdout'),
+                  'mimeType': 'text/plain',
+                  'title': 'Startup logs',
+                },
+              ],
+            },
+            resourceLinks: <Map<String, Object?>>[
+              _resourceLink(
+                uri: 'session://${session.sessionId}/summary',
+                mimeType: 'application/json',
+                title: 'Session summary',
+              ),
+              _resourceLink(
+                uri: artifactStore.sessionLogUri(session.sessionId, 'stdout'),
+                mimeType: 'text/plain',
+                title: 'Startup logs',
+              ),
+            ],
+          );
+        case 'attach_app':
+          final workspaceRoot = await _resolveWorkspaceRoot(
+            arguments['workspaceRoot'] as String?,
+          );
+          final attached = await launcherTools.attachApp(
+            workspaceRoot: workspaceRoot,
+            platform: _requiredString(arguments['platform'], 'platform'),
+            target: (arguments['target'] as String?) ?? config.defaults.target,
+            mode: (arguments['mode'] as String?) ?? config.defaults.mode,
+            flavor: arguments['flavor'] as String?,
+            deviceId: arguments['deviceId'] as String?,
+            sessionId: arguments['sessionId'] as String?,
+            debugUrl: arguments['debugUrl'] as String?,
+            appId: arguments['appId'] as String?,
+          );
+          return _toolSuccessResult(
+            summary: 'Attached session ${attached.sessionId} is ready.',
+            structuredContent: attached.toJson(),
+            resourceLinks: <Map<String, Object?>>[
+              _resourceLink(
+                uri: 'session://${attached.sessionId}/summary',
+                mimeType: 'application/json',
+                title: 'Session summary',
+              ),
+            ],
+          );
+        case 'stop_app':
+          final stopped = await launcherTools.stopApp(
+            sessionId: _requiredString(arguments['sessionId'], 'sessionId'),
+          );
+          return _toolSuccessResult(
+            summary: 'Session ${stopped.sessionId} is ${stopped.state.wireName}.',
+            structuredContent: stopped.toJson(),
+            resourceLinks: <Map<String, Object?>>[
+              _resourceLink(
+                uri: 'session://${stopped.sessionId}/summary',
+                mimeType: 'application/json',
+                title: 'Session summary',
+              ),
+            ],
+          );
+        case 'get_logs':
+          final result = await runtimeTools.getLogs(
+            sessionId: _requiredString(arguments['sessionId'], 'sessionId'),
+            stream: (arguments['stream'] as String?) ?? 'both',
+            tailLines: arguments['tailLines'] as int? ?? 200,
+          );
+          return _toolSuccessResult(
+            summary: 'Retrieved ${result['stream']} logs.',
+            structuredContent: result,
+            resourceLinks: _resourceLinksFromPayload(result['resources']),
+          );
+        case 'get_runtime_errors':
+          final result = await runtimeTools.getRuntimeErrors(
+            sessionId: _requiredString(arguments['sessionId'], 'sessionId'),
+          );
+          return _toolSuccessResult(
+            summary: '${result['count']} runtime error(s) found.',
+            structuredContent: result,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[result['resource']]),
+          );
+        case 'get_widget_tree':
+          final depth = arguments['depth'] as int? ?? 3;
+          final result = await runtimeTools.getWidgetTree(
+            sessionId: _requiredString(arguments['sessionId'], 'sessionId'),
+            depth: depth,
+            includeProperties: arguments['includeProperties'] as bool? ?? false,
+          );
+          return _toolSuccessResult(
+            summary: 'Captured widget tree for session ${result['sessionId']}.',
+            structuredContent: result,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[result['resource']]),
+          );
+        case 'get_app_state_summary':
+          final result = await runtimeTools.getAppStateSummary(
+            sessionId: _requiredString(arguments['sessionId'], 'sessionId'),
+          );
+          return _toolSuccessResult(
+            summary: 'App state summary retrieved.',
+            structuredContent: result,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[result['resource']]),
+          );
+        case 'run_unit_tests':
+          final workspaceRoot = await _resolveWorkspaceRoot(
+            arguments['workspaceRoot'] as String?,
+          );
+          final result = await testTools.runUnitTests(
+            workspaceRoot: workspaceRoot,
+            targets: _asStringList(arguments['targets']),
+            coverage: arguments['coverage'] as bool? ?? false,
+          );
+          return _toolSuccessResult(
+            summary: 'Unit tests ${result['status']}.',
+            structuredContent: result,
+            resourceLinks: _resourceLinksFromPayload(result['resources']),
+          );
+        case 'run_widget_tests':
+          final workspaceRoot = await _resolveWorkspaceRoot(
+            arguments['workspaceRoot'] as String?,
+          );
+          final result = await testTools.runWidgetTests(
+            workspaceRoot: workspaceRoot,
+            targets: _asStringList(arguments['targets']),
+            coverage: arguments['coverage'] as bool? ?? false,
+          );
+          return _toolSuccessResult(
+            summary: 'Widget tests ${result['status']}.',
+            structuredContent: result,
+            resourceLinks: _resourceLinksFromPayload(result['resources']),
+          );
         default:
           throw FlutterHelmToolError(
             code: 'TOOL_NOT_IMPLEMENTED',
             category: 'internal',
-            message: 'Tool not implemented in Phase 0: ${definition.name}',
+            message: 'Tool not implemented in Phase 1: ${definition.name}',
             retryable: false,
           );
       }
@@ -595,6 +858,58 @@ class FlutterHelmServer {
       );
     }
     return activeRoot;
+  }
+
+  Future<String> _resolveWorkspaceRoot(String? workspaceRootArgument) async {
+    if (workspaceRootArgument == null || workspaceRootArgument.isEmpty) {
+      return _requireActiveRoot();
+    }
+    return rootPolicy.validateWorkspaceRoot(
+      requestedRoot: workspaceRootArgument,
+      clientRoots: await _getClientRoots(),
+    );
+  }
+
+  List<String> _implementedWorkflows() {
+    final workflows = <String>{
+      for (final definition in toolRegistry.allDefinitions)
+        if (definition.implemented) definition.workflow,
+    }.toList()
+      ..sort();
+    return workflows;
+  }
+
+  List<Map<String, Object?>> _resourceLinksFromPayload(Object? payload) {
+    return _asList(payload).map((Object? item) {
+      final resource = _asMap(item);
+      return _resourceLink(
+        uri: _requiredString(resource['uri'], 'uri'),
+        mimeType: resource['mimeType'] as String? ?? 'application/json',
+        title: resource['title'] as String? ?? resource['uri'] as String? ?? 'resource',
+      );
+    }).toList();
+  }
+
+  Map<String, Object?> _resourceLink({
+    required String uri,
+    required String mimeType,
+    required String title,
+  }) {
+    return <String, Object?>{
+      'type': 'resource_link',
+      'uri': uri,
+      'name': title,
+      'description': title,
+      'mimeType': mimeType,
+      'annotations': <String, Object?>{
+        'audience': const <String>['assistant'],
+        'priority': 0.8,
+      },
+    };
+  }
+
+  List<String> _asStringList(Object? value) {
+    return _asList(value).whereType<String>().toList();
   }
 
   void _ensureInitialized() {
@@ -732,6 +1047,22 @@ String? _extractErrorCode(Object? structuredContent) {
 }
 
 String? _sessionIdFromUri(String uri) {
-  final match = RegExp(r'^session://([^/]+)/summary$').firstMatch(uri);
-  return match?.group(1);
+  for (final pattern in <RegExp>[
+    RegExp(r'^session://([^/]+)/(?:summary|health)$'),
+    RegExp(r'^log://([^/]+)/(?:stdout|stderr)$'),
+    RegExp(r'^runtime-errors://([^/]+)/current$'),
+    RegExp(r'^widget-tree://([^/]+)/current(?:\?.*)?$'),
+    RegExp(r'^app-state://([^/]+)/summary$'),
+    RegExp(r'^timeline://([^/]+)/[^/]+$'),
+    RegExp(r'^memory://([^/]+)/[^/]+$'),
+    RegExp(r'^cpu://([^/]+)/[^/]+$'),
+    RegExp(r'^screenshot://([^/]+)/[^/]+$'),
+    RegExp(r'^native-handoff://([^/]+)/(?:ios|android)$'),
+  ]) {
+    final match = pattern.firstMatch(uri);
+    if (match != null) {
+      return match.group(1);
+    }
+  }
+  return null;
 }

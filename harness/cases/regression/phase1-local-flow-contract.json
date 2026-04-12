@@ -1,0 +1,18 @@
+{
+  "id": "phase1-local-flow-contract",
+  "mode": "software",
+  "tags": ["regression"],
+  "input": {
+    "checks": ["phase1-tool-exposure", "phase0-root-session-flow", "phase1-sample-app-flow", "phase0-audit-log"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": [
+      "check:phase1-tool-exposure:ok",
+      "check:phase0-root-session-flow:ok",
+      "check:phase1-sample-app-flow:ok",
+      "check:phase0-audit-log:ok",
+      "summary:phase1-local-flow-contract"
+    ]
+  }
+}

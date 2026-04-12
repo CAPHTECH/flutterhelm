@@ -1,0 +1,15 @@
+{
+  "id": "ios-overflow-runtime",
+  "mode": "software",
+  "tags": ["runtime"],
+  "input": {
+    "checks": ["phase1-runtime-overflow-flow"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": [
+      "check:phase1-runtime-overflow-flow:ok",
+      "summary:ios-overflow-runtime"
+    ]
+  }
+}

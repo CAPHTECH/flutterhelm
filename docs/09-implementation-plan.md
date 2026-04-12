@@ -199,7 +199,7 @@ adapters:
     enabled: false
 ```
 
-### Phase 0 runtime paths
+### Phase 0 / Phase 1 runtime paths
 
 Phase 0 の実装では mutable state を repo 外へ逃がします。
 
@@ -208,8 +208,13 @@ Phase 0 の実装では mutable state を repo 外へ逃がします。
 - default audit log path: `~/.config/flutterhelm/audit.jsonl`
 - override: `--config`, `--state-dir`, `FLUTTERHELM_CONFIG_PATH`, `FLUTTERHELM_STATE_DIR`
 
-なお、Phase 0 で永続化されるのは active root と audit log のみです。  
-session は process lifetime の in-memory store に留めます。
+Phase 1 ではさらに以下を state dir 配下へ保存します。
+
+- `sessions.json`
+- `artifacts/sessions/<session-id>/...`
+- `artifacts/test-runs/<run-id>/...`
+
+live process handle と raw VM service URI は process lifetime のみで保持し、再起動後の session は `stale=true` として復元します。
 
 ## 5. First sprint plan
 
@@ -228,6 +233,7 @@ session は process lifetime の in-memory store に留めます。
 - CLI adapter
 - `device_list`
 - `run_app`
+- `attach_app`
 - `stop_app`
 - stdout/stderr capture
 - session persistence
@@ -291,14 +297,12 @@ session は process lifetime の in-memory store に留めます。
 
 ### Scenario: Layout error diagnosis loop
 
-1. sample app を起動する
-2. known overflow screen へ遷移する
-3. `get_runtime_errors` で overflow を検出する
-4. `get_widget_tree` resource を取得する
-5. agent が修正案を提示する
-6. 人間承認の上で code patch を適用する
-7. `hot_reload`
-8. 再度 `get_runtime_errors` を取り、解消を確認する
+1. `fixtures/sample_app` を `FLUTTERHELM_SCENARIO=overflow` で起動する
+2. `get_runtime_errors` で overflow を検出する
+3. `get_widget_tree` resource を取得する
+4. `attach_app` で readonly attach session を作る
+5. attached session に対する `stop_app` が拒否されることを確認する
+6. owned session に対して `stop_app` を実行する
 
 ## 8. Observability plan
 

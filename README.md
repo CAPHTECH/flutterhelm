@@ -1,6 +1,6 @@
 # FlutterHelm
 
-FlutterHelm は、**Flutter 開発向けの agent-safe な orchestration layer / MCP server** の設計案です。
+FlutterHelm は、**Flutter 開発向けの agent-safe な orchestration layer / MCP server** です。
 
 狙いは、Flutter 開発で散在している以下の面を、AI エージェントにとって扱いやすい一貫した面へ整理することです。
 
@@ -15,23 +15,37 @@ FlutterHelm は、これらを置き換えるものではありません。
 
 ## ステータス
 
-- 状態: **Design proposal**
-- 実装: **Phase 0 core is available in this repository**
+- 状態: **Local alpha implementation**
+- 実装: **Phase 1 core is available in this repository**
 - 実装前提: MCP client は最低でも **Tools** と **Resources** を扱えること
 - 推奨: **Roots** を扱えること
 - 初期 transport: **stdio-first**
 - 主要スコープ: Flutter ローカル開発、実行中アプリの観測、テスト、profiling、限定的な runtime interaction
 
-現在コードで実装されているのは Phase 0 の最小面です。
+現在コードで実装されているのは Phase 1 のローカル反復面です。
 
+- `workspace_discover`
+- `analyze_project`
+- `resolve_symbol`
+- `format_files`
 - `workspace_show`
 - `workspace_set_root`
 - `session_open`
 - `session_list`
+- `device_list`
+- `run_app`
+- `attach_app`
+- `stop_app`
+- `get_logs`
+- `get_runtime_errors`
+- `get_widget_tree`
+- `get_app_state_summary`
+- `run_unit_tests`
+- `run_widget_tests`
 - `serverInfo` / capability negotiation
 
-未実装の launcher / runtime diagnostics / tests / profiling / native bridge は、設計どおり次フェーズの対象です。
-Session persistence もまだ入っておらず、現在の session は process lifetime のみで保持されます。
+未実装なのは dependency mutation / integration tests / coverage completion / profiling / native bridge / runtime interaction です。
+session metadata は `stateDir/sessions.json` に永続化され、artifact は `stateDir/artifacts/` に保存されます。live process handle 自体は process lifetime のみです。
 
 ## なぜ別レイヤが必要か
 
@@ -126,9 +140,13 @@ config/state の既定配置は `~/.config/flutterhelm/` です。
 
 - `config.yaml`
 - `state.json`
+- `sessions.json`
 - `audit.jsonl`
+- `artifacts/`
 
 必要なら `--config` と `--state-dir` で上書きできます。
+
+repo-local の deterministic fixture は `fixtures/sample_app/` にあります。
 
 ## 命名の意図
 
@@ -145,10 +163,11 @@ mise exec -- pnpm -C harness bootstrap
 mise exec -- pnpm -C harness validate
 mise exec -- pnpm -C harness smoke
 mise exec -- pnpm -C harness contracts
+mise exec -- pnpm -C harness runtime
 mise exec -- pnpm -C harness qa
 ```
 
 `bootstrap` は `harness/.venv-docs` に MkDocs を導入するため、global な `mkdocs` install は不要です。  
-Phase 0 implementation checks を含む `smoke` / `contracts` を回す前に `mise trust && mise install && mise exec -- dart pub get` を済ませてください。  
+`smoke` / `contracts` / `runtime` を回す前に `mise trust && mise install && mise exec -- dart pub get` を済ませてください。  
 report は `harness/reports/`、QA trace は `harness/traces/` に残ります。
-`pull_request` では `smoke` を gate にし、拡張 contract は `contracts` または `workflow_dispatch` で回します。
+`runtime` は macOS + Xcode simulator 前提のローカル検証です。

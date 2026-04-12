@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/config/config.dart';
 import 'package:flutterhelm/policies/roots.dart';
 import 'package:flutterhelm/server/errors.dart';
@@ -77,30 +78,37 @@ class ResourceReadResult {
 }
 
 class ResourceCatalog {
-  const ResourceCatalog();
+  const ResourceCatalog({required this.artifactStore});
 
-  List<ResourceDescriptor> listResources({
+  final ArtifactStore artifactStore;
+
+  Future<List<ResourceDescriptor>> listResources({
     required FlutterHelmConfig config,
     required ServerState state,
     required RootSnapshot rootSnapshot,
     required Iterable<SessionRecord> sessions,
-  }) {
+  }) async {
     final resources = <ResourceDescriptor>[
       _workspaceCurrentDescriptor(state),
       _workspaceDefaultsDescriptor(config),
       ...sessions.map(_sessionSummaryDescriptor),
     ];
+
+    for (final session in sessions) {
+      resources.addAll(await artifactStore.listSessionResources(session.sessionId));
+    }
+    resources.addAll(await artifactStore.listTestRunResources());
     resources.sort((left, right) => left.uri.compareTo(right.uri));
     return resources;
   }
 
-  ResourceReadResult readResource({
+  Future<ResourceReadResult> readResource({
     required String uri,
     required FlutterHelmConfig config,
     required ServerState state,
     required RootSnapshot rootSnapshot,
     required SessionRecord? session,
-  }) {
+  }) async {
     if (uri == 'config://workspace/current') {
       return ResourceReadResult(
         uri: uri,
@@ -135,6 +143,11 @@ class ResourceCatalog {
         mimeType: 'application/json',
         text: jsonEncode(session.toJson()),
       );
+    }
+
+    final stored = await artifactStore.readStoredResource(uri);
+    if (stored != null) {
+      return stored;
     }
 
     throw FlutterHelmToolError(
@@ -173,7 +186,7 @@ class ResourceCatalog {
       uri: 'session://${session.sessionId}/summary',
       name: 'session.summary.${session.sessionId}',
       title: 'Session summary ${session.sessionId}',
-      description: 'Phase 0 session context record.',
+      description: 'Persisted session record.',
       mimeType: 'application/json',
       lastModified: session.lastSeenAt,
       size: jsonEncode(session.toJson()).length,

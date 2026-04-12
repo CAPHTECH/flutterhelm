@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -34,7 +34,10 @@ type CheckName =
   | "phase0-server-smoke"
   | "phase0-tool-exposure"
   | "phase0-root-session-flow"
-  | "phase0-audit-log";
+  | "phase0-audit-log"
+  | "phase1-tool-exposure"
+  | "phase1-sample-app-flow"
+  | "phase1-runtime-overflow-flow";
 
 interface ContractCaseInput {
   checks?: CheckName[];
@@ -211,6 +214,24 @@ async function createPhase0Fixture(): Promise<Phase0Fixture> {
   };
 }
 
+async function createSampleAppFixture(repoRoot: string): Promise<Phase0Fixture> {
+  const sandboxDir = await mkdtemp(resolve(tmpdir(), "flutterhelm-phase1-"));
+  const workspaceRoot = resolve(sandboxDir, "sample_app");
+  const stateDir = resolve(sandboxDir, "state");
+  const sourceRoot = resolve(repoRoot, "fixtures", "sample_app");
+
+  await cp(sourceRoot, workspaceRoot, { recursive: true });
+  await rm(resolve(workspaceRoot, ".dart_tool"), { recursive: true, force: true });
+  await rm(resolve(workspaceRoot, "build"), { recursive: true, force: true });
+  await mkdir(stateDir, { recursive: true });
+
+  return {
+    sandboxDir,
+    stateDir,
+    workspaceRoot: await realpath(workspaceRoot),
+  };
+}
+
 function requireObject(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Expected ${label} to be an object`);
@@ -242,6 +263,34 @@ async function withPhase0Client<T>(
     repoRoot,
     fixture.stateDir,
     clientRootsFactory(fixture),
+  );
+  try {
+    return await callback(fixture, client);
+  } finally {
+    await client.close();
+    await rm(fixture.sandboxDir, { recursive: true, force: true });
+  }
+}
+
+async function withSampleAppClient<T>(
+  repoRoot: string,
+  callback: (fixture: Phase0Fixture, client: Phase0HarnessClient) => Promise<T>,
+): Promise<T> {
+  const fixture = await createSampleAppFixture(repoRoot);
+  const pubGet = await runCommandCapture(
+    "mise",
+    ["exec", "--", "flutter", "pub", "get"],
+    fixture.workspaceRoot,
+  );
+  if (pubGet.exitCode !== 0) {
+    await rm(fixture.sandboxDir, { recursive: true, force: true });
+    throw new Error(pubGet.stderr || pubGet.stdout || "flutter pub get failed for sample app fixture");
+  }
+
+  const client = await Phase0HarnessClient.start(
+    repoRoot,
+    fixture.stateDir,
+    [fixture.workspaceRoot],
   );
   try {
     return await callback(fixture, client);
@@ -418,6 +467,258 @@ async function checkPhase0AuditLog(repoRoot: string): Promise<void> {
     }
     if (!events.some((event) => event.tool === "session_open" && event.result === "success")) {
       throw new Error("Audit log is missing successful session_open event");
+    }
+  });
+}
+
+async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
+  await withSampleAppClient(repoRoot, async (_fixture, client) => {
+    const initialize = await client.initialize();
+    const capabilities = requireObject(initialize.capabilities, "initialize.capabilities");
+    const experimental = requireObject(capabilities.experimental, "capabilities.experimental");
+    const workflowStatus = requireObject(experimental.workflowStatus, "workflowStatus");
+
+    for (const [workflow, implemented] of [
+      ["workspace", true],
+      ["session", true],
+      ["launcher", true],
+      ["runtime_readonly", true],
+      ["tests", true],
+      ["runtime_interaction", false],
+      ["profiling", false],
+      ["platform_bridge", false],
+    ] as const) {
+      const status = requireObject(workflowStatus[workflow], `workflowStatus.${workflow}`);
+      if (status.implemented !== implemented) {
+        throw new Error(`workflow ${workflow} implemented=${implemented} expected, got ${String(status.implemented)}`);
+      }
+    }
+
+    const toolsList = await client.request("tools/list");
+    const tools = requireArray(toolsList.tools, "tools/list.tools")
+      .map((tool) => requireObject(tool, "tool"))
+      .map((tool) => requireString(tool.name, "tool.name"))
+      .sort();
+    const expectedTools = [
+      "analyze_project",
+      "attach_app",
+      "device_list",
+      "format_files",
+      "get_app_state_summary",
+      "get_logs",
+      "get_runtime_errors",
+      "get_widget_tree",
+      "resolve_symbol",
+      "run_app",
+      "run_unit_tests",
+      "run_widget_tests",
+      "session_list",
+      "session_open",
+      "stop_app",
+      "workspace_discover",
+      "workspace_set_root",
+      "workspace_show",
+    ];
+    if (JSON.stringify(tools) !== JSON.stringify(expectedTools)) {
+      throw new Error(`Unexpected Phase 1 tools exposure: ${JSON.stringify(tools)}`);
+    }
+  });
+}
+
+async function checkPhase1SampleAppFlow(repoRoot: string): Promise<void> {
+  await withSampleAppClient(repoRoot, async (fixture, client) => {
+    await client.initialize();
+
+    const discovered = await client.callTool("workspace_discover");
+    const discoveredStructured = requireObject(discovered.structuredContent, "workspace_discover.structuredContent");
+    const workspaces = requireArray(discoveredStructured.workspaces, "workspace_discover.workspaces")
+      .map((value) => requireObject(value, "workspace entry"));
+    if (!workspaces.some((workspace) => requireString(workspace.workspaceRoot, "workspace.workspaceRoot") === fixture.workspaceRoot)) {
+      throw new Error("workspace_discover did not return the sample app fixture");
+    }
+
+    await client.callTool("workspace_set_root", {
+      workspaceRoot: fixture.workspaceRoot,
+    });
+
+    const analysis = await client.callTool("analyze_project");
+    const analysisStructured = requireObject(analysis.structuredContent, "analyze_project.structuredContent");
+    if (analysisStructured.exitCode !== 0) {
+      throw new Error(`analyze_project failed: ${String(analysisStructured.stderr || analysisStructured.stdout || analysisStructured.exitCode)}`);
+    }
+
+    const resolution = await client.callTool("resolve_symbol", { symbol: "SampleApp" });
+    const resolutionStructured = requireObject(resolution.structuredContent, "resolve_symbol.structuredContent");
+    const matches = requireArray(resolutionStructured.matches, "resolve_symbol.matches")
+      .map((value) => requireObject(value, "resolve_symbol match"));
+    if (!matches.some((match) => requireString(match.path, "resolve_symbol.path").endsWith("/lib/app.dart"))) {
+      throw new Error("resolve_symbol did not resolve SampleApp in lib/app.dart");
+    }
+
+    const formatTarget = resolve(fixture.workspaceRoot, "lib", "format_me.dart");
+    await writeFile(formatTarget, "void main( ){print('x');}\n");
+    const formatted = await client.callTool("format_files", {
+      paths: ["lib/format_me.dart"],
+    });
+    const formattedStructured = requireObject(formatted.structuredContent, "format_files.structuredContent");
+    if (formattedStructured.exitCode !== 0) {
+      throw new Error(`format_files failed: ${String(formattedStructured.stderr || formattedStructured.stdout || formattedStructured.exitCode)}`);
+    }
+    const formattedText = await readFile(formatTarget, "utf8");
+    if (!formattedText.includes("void main() {\n  print('x');\n}\n")) {
+      throw new Error(`format_files did not rewrite lib/format_me.dart as expected: ${formattedText}`);
+    }
+
+    const unitTests = await client.callTool("run_unit_tests");
+    const unitStructured = requireObject(unitTests.structuredContent, "run_unit_tests.structuredContent");
+    const unitRunId = requireString(unitStructured.runId, "run_unit_tests.runId");
+    const unitSummary = requireObject(unitStructured.summary, "run_unit_tests.summary");
+    if (unitSummary.failed !== 0) {
+      throw new Error(`run_unit_tests reported failures: ${JSON.stringify(unitSummary)}`);
+    }
+
+    const widgetTests = await client.callTool("run_widget_tests");
+    const widgetStructured = requireObject(widgetTests.structuredContent, "run_widget_tests.structuredContent");
+    const widgetRunId = requireString(widgetStructured.runId, "run_widget_tests.runId");
+    const widgetSummary = requireObject(widgetStructured.summary, "run_widget_tests.summary");
+    if (widgetSummary.failed !== 0) {
+      throw new Error(`run_widget_tests reported failures: ${JSON.stringify(widgetSummary)}`);
+    }
+
+    const resources = await client.request("resources/list");
+    const uris = requireArray(resources.resources, "resources/list.resources")
+      .map((value) => requireObject(value, "resource"))
+      .map((value) => requireString(value.uri, "resource.uri"));
+    for (const expected of [
+      `test-report://${unitRunId}/summary`,
+      `test-report://${unitRunId}/details`,
+      `test-report://${widgetRunId}/summary`,
+      `test-report://${widgetRunId}/details`,
+    ]) {
+      if (!uris.includes(expected)) {
+        throw new Error(`resources/list is missing ${expected}`);
+      }
+    }
+
+    const summaryResource = await client.request("resources/read", {
+      uri: `test-report://${unitRunId}/summary`,
+    });
+    const summaryContents = requireArray(summaryResource.contents, "unit summary contents");
+    const summaryBody = requireObject(summaryContents[0], "unit summary content");
+    const decoded = JSON.parse(requireString(summaryBody.text, "unit summary text")) as Record<string, unknown>;
+    if (decoded.runId !== unitRunId) {
+      throw new Error(`unit test summary returned ${String(decoded.runId)} instead of ${unitRunId}`);
+    }
+  });
+}
+
+async function checkPhase1RuntimeOverflowFlow(repoRoot: string): Promise<void> {
+  await withSampleAppClient(repoRoot, async (fixture, client) => {
+    await client.initialize();
+    await client.callTool("workspace_set_root", {
+      workspaceRoot: fixture.workspaceRoot,
+    });
+
+    const devicesResult = await client.callTool("device_list");
+    const devicesStructured = requireObject(devicesResult.structuredContent, "device_list.structuredContent");
+    const devices = requireArray(devicesStructured.devices, "device_list.devices")
+      .map((value) => requireObject(value, "device entry"));
+    const iosDevice = devices.find((device) => device.platform === "ios" && device.availability === "available");
+    if (!iosDevice) {
+      throw new Error("device_list did not return an available iOS simulator/device");
+    }
+
+    const contextSession = await client.callTool("session_open", {
+      target: "lib/main.dart",
+      mode: "debug",
+    });
+    const contextStructured = requireObject(contextSession.structuredContent, "session_open.structuredContent");
+    const contextSessionId = requireString(contextStructured.sessionId, "session_open.sessionId");
+
+    let ownedSessionId: string | null = null;
+    try {
+      const running = await client.callTool("run_app", {
+        sessionId: contextSessionId,
+        platform: "ios",
+        dartDefines: ["FLUTTERHELM_SCENARIO=overflow"],
+      });
+      if (running.isError === true) {
+        const error = requireObject(requireObject(running.structuredContent, "run_app error").error, "run_app structured error");
+        throw new Error(`run_app failed: ${String(error.code)}: ${String(error.message)}`);
+      }
+      const runningStructured = requireObject(running.structuredContent, "run_app.structuredContent");
+      ownedSessionId = requireString(runningStructured.sessionId, "run_app.sessionId");
+      if (runningStructured.state !== "running") {
+        throw new Error(`run_app returned unexpected state ${String(runningStructured.state)}`);
+      }
+
+      let runtimeErrors: Record<string, unknown> | null = null;
+      for (let attempt = 0; attempt < 15; attempt += 1) {
+        runtimeErrors = await client.callTool("get_runtime_errors", {
+          sessionId: ownedSessionId,
+        });
+        const structured = requireObject(runtimeErrors.structuredContent, "get_runtime_errors.structuredContent");
+        if ((structured.count as number) > 0) {
+          const errors = requireArray(structured.errors, "get_runtime_errors.errors")
+            .map((value) => requireObject(value, "runtime error"));
+          if (!errors.some((error) => requireString(error.summary, "runtime error summary").includes("RenderFlex overflowed"))) {
+            throw new Error(`get_runtime_errors found errors, but not the expected overflow: ${JSON.stringify(errors)}`);
+          }
+          break;
+        }
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 1000));
+      }
+      if (runtimeErrors == null) {
+        throw new Error("get_runtime_errors did not produce a result");
+      }
+      const runtimeStructured = requireObject(runtimeErrors.structuredContent, "get_runtime_errors.structuredContent");
+      if ((runtimeStructured.count as number) <= 0) {
+        throw new Error("Expected overflow scenario to produce at least one runtime error");
+      }
+
+      const widgetTree = await client.callTool("get_widget_tree", {
+        sessionId: ownedSessionId,
+        depth: 2,
+      });
+      const widgetStructured = requireObject(widgetTree.structuredContent, "get_widget_tree.structuredContent");
+      const widgetResource = requireObject(widgetStructured.resource, "get_widget_tree.resource");
+      const widgetUri = requireString(widgetResource.uri, "get_widget_tree.resource.uri");
+      const widgetResourceResult = await client.request("resources/read", {
+        uri: widgetUri,
+      });
+      const widgetContents = requireArray(widgetResourceResult.contents, "widget tree contents");
+      const widgetBody = requireObject(widgetContents[0], "widget tree content");
+      const widgetPayload = JSON.parse(requireString(widgetBody.text, "widget tree text")) as Record<string, unknown>;
+      if (widgetPayload.sessionId !== ownedSessionId) {
+        throw new Error(`widget tree resource returned ${String(widgetPayload.sessionId)} instead of ${ownedSessionId}`);
+      }
+
+      const attached = await client.callTool("attach_app", {
+        sessionId: ownedSessionId,
+        platform: "ios",
+      });
+      const attachedStructured = requireObject(attached.structuredContent, "attach_app.structuredContent");
+      const attachedSessionId = requireString(attachedStructured.sessionId, "attach_app.sessionId");
+      if (attachedStructured.ownership !== "attached") {
+        throw new Error(`attach_app returned unexpected ownership ${String(attachedStructured.ownership)}`);
+      }
+
+      const attachedStop = await client.callTool("stop_app", {
+        sessionId: attachedSessionId,
+      });
+      if (attachedStop.isError !== true) {
+        throw new Error("stop_app should reject attached sessions");
+      }
+      const attachedError = requireObject(requireObject(attachedStop.structuredContent, "attached stop error").error, "attached stop structured error");
+      if (attachedError.code !== "ATTACHED_SESSION_STOP_FORBIDDEN") {
+        throw new Error(`Expected ATTACHED_SESSION_STOP_FORBIDDEN, got ${String(attachedError.code)}`);
+      }
+    } finally {
+      if (ownedSessionId != null) {
+        await client.callTool("stop_app", {
+          sessionId: ownedSessionId,
+        });
+      }
     }
   });
 }
@@ -798,6 +1099,9 @@ const CHECKS: Record<CheckName, (repoRoot: string, harnessRoot: string) => Promi
   "phase0-tool-exposure": (repoRoot) => checkPhase0ToolExposure(repoRoot),
   "phase0-root-session-flow": (repoRoot) => checkPhase0RootSessionFlow(repoRoot),
   "phase0-audit-log": (repoRoot) => checkPhase0AuditLog(repoRoot),
+  "phase1-tool-exposure": (repoRoot) => checkPhase1ToolExposure(repoRoot),
+  "phase1-sample-app-flow": (repoRoot) => checkPhase1SampleAppFlow(repoRoot),
+  "phase1-runtime-overflow-flow": (repoRoot) => checkPhase1RuntimeOverflowFlow(repoRoot),
 };
 
 async function main(): Promise<void> {

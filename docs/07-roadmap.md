@@ -15,6 +15,14 @@ FlutterHelm は最初から全部を載せるべきではありません。
 4. **native bridge**
 5. **optional runtime interaction**
 
+## 現在地点
+
+この repository では Phase 1 の local alpha surface を実装済みです。
+
+- workspace/session/launcher/runtime_readonly/tests が local で動く
+- repo-local `fixtures/sample_app` で deterministic validation ができる
+- 以降の優先順位は dependency mutation, integration tests, coverage, profiling, native bridge
+
 ## Phase 0 — Foundation
 
 ### 目的

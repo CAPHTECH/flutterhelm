@@ -90,7 +90,7 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'List Flutter workspace candidates.',
       workflow: 'workspace',
       risk: RiskClass.readOnly,
-      implemented: false,
+      implemented: true,
     ),
     ToolDefinition(
       name: 'workspace_set_root',
@@ -122,7 +122,16 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Run static analysis.',
       workflow: 'workspace',
       risk: RiskClass.readOnly,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'workspaceRoot': <String, Object?>{'type': 'string'},
+          'fatalInfos': <String, Object?>{'type': 'boolean'},
+          'fatalWarnings': <String, Object?>{'type': 'boolean'},
+        },
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'resolve_symbol',
@@ -130,7 +139,16 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Resolve symbol metadata.',
       workflow: 'workspace',
       risk: RiskClass.readOnly,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'workspaceRoot': <String, Object?>{'type': 'string'},
+          'symbol': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['symbol'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'format_files',
@@ -138,7 +156,20 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Format workspace files.',
       workflow: 'workspace',
       risk: RiskClass.projectMutation,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'workspaceRoot': <String, Object?>{'type': 'string'},
+          'paths': <String, Object?>{
+            'type': 'array',
+            'items': <String, Object?>{'type': 'string'},
+          },
+          'lineLength': <String, Object?>{'type': 'integer', 'minimum': 40},
+        },
+        'required': <String>['paths'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'pub_search',
@@ -215,7 +246,7 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'List connected devices.',
       workflow: 'launcher',
       risk: RiskClass.readOnly,
-      implemented: false,
+      implemented: true,
     ),
     ToolDefinition(
       name: 'run_app',
@@ -223,7 +254,32 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Launch an app.',
       workflow: 'launcher',
       risk: RiskClass.runtimeControl,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'workspaceRoot': <String, Object?>{'type': 'string'},
+          'target': <String, Object?>{'type': 'string', 'default': 'lib/main.dart'},
+          'platform': <String, Object?>{
+            'type': 'string',
+            'enum': <String>['ios', 'android', 'macos', 'linux', 'windows', 'web'],
+          },
+          'deviceId': <String, Object?>{'type': 'string'},
+          'flavor': <String, Object?>{'type': 'string'},
+          'mode': <String, Object?>{
+            'type': 'string',
+            'enum': <String>['debug', 'profile', 'release'],
+            'default': 'debug',
+          },
+          'dartDefines': <String, Object?>{
+            'type': 'array',
+            'items': <String, Object?>{'type': 'string'},
+          },
+        },
+        'required': <String>['platform'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'attach_app',
@@ -231,7 +287,30 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Attach to an existing app.',
       workflow: 'launcher',
       risk: RiskClass.runtimeControl,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'workspaceRoot': <String, Object?>{'type': 'string'},
+          'platform': <String, Object?>{
+            'type': 'string',
+            'enum': <String>['ios', 'android', 'macos', 'linux', 'windows', 'web'],
+          },
+          'deviceId': <String, Object?>{'type': 'string'},
+          'target': <String, Object?>{'type': 'string', 'default': 'lib/main.dart'},
+          'flavor': <String, Object?>{'type': 'string'},
+          'mode': <String, Object?>{
+            'type': 'string',
+            'enum': <String>['debug', 'profile'],
+            'default': 'debug',
+          },
+          'debugUrl': <String, Object?>{'type': 'string'},
+          'appId': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['platform'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'stop_app',
@@ -239,7 +318,15 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Stop a managed app process.',
       workflow: 'launcher',
       risk: RiskClass.runtimeControl,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'build_app',
@@ -255,7 +342,15 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Read runtime errors.',
       workflow: 'runtime_readonly',
       risk: RiskClass.readOnly,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'get_widget_tree',
@@ -263,7 +358,22 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Read the current widget tree snapshot.',
       workflow: 'runtime_readonly',
       risk: RiskClass.readOnly,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'depth': <String, Object?>{
+            'type': 'integer',
+            'minimum': 1,
+            'maximum': 12,
+            'default': 3,
+          },
+          'includeProperties': <String, Object?>{'type': 'boolean', 'default': false},
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'get_logs',
@@ -271,7 +381,26 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Read session logs.',
       workflow: 'runtime_readonly',
       risk: RiskClass.readOnly,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'stream': <String, Object?>{
+            'type': 'string',
+            'enum': <String>['stdout', 'stderr', 'both'],
+            'default': 'both',
+          },
+          'tailLines': <String, Object?>{
+            'type': 'integer',
+            'minimum': 1,
+            'maximum': 2000,
+            'default': 200,
+          },
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'get_app_state_summary',
@@ -279,7 +408,15 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Read a high-level app summary.',
       workflow: 'runtime_readonly',
       risk: RiskClass.readOnly,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'capture_screenshot',
@@ -295,7 +432,19 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Run unit tests.',
       workflow: 'tests',
       risk: RiskClass.testExecution,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'workspaceRoot': <String, Object?>{'type': 'string'},
+          'targets': <String, Object?>{
+            'type': 'array',
+            'items': <String, Object?>{'type': 'string'},
+          },
+          'coverage': <String, Object?>{'type': 'boolean', 'default': false},
+        },
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'run_widget_tests',
@@ -303,7 +452,19 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Run widget tests.',
       workflow: 'tests',
       risk: RiskClass.testExecution,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'workspaceRoot': <String, Object?>{'type': 'string'},
+          'targets': <String, Object?>{
+            'type': 'array',
+            'items': <String, Object?>{'type': 'string'},
+          },
+          'coverage': <String, Object?>{'type': 'boolean', 'default': false},
+        },
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'run_integration_tests',

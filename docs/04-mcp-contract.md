@@ -26,6 +26,14 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 - Roots support が望ましい
 - Roots 非対応 client 向け fallback は opt-in
 
+### Current local alpha surface
+
+この repository の current implementation は Phase 1 相当です。
+
+- `workspace`, `session`, `launcher`, `runtime_readonly`, `tests` workflow を local で実装
+- transport は `stdio-first`
+- runtime interaction / profiling / platform bridge は未実装
+
 ## 3. Workflow Groups
 
 | Workflow | 目的 | 初期有効 |
@@ -133,6 +141,7 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
     "type": "object",
     "properties": {
       "workspaceRoot": { "type": "string" },
+      "sessionId": { "type": "string" },
       "target": { "type": "string", "default": "lib/main.dart" },
       "platform": {
         "type": "string",

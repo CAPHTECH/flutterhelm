@@ -26,18 +26,23 @@ Session は、**1 つの workspace / target / platform / device / mode / runtime
 {
   "sessionId": "sess_01H...",
   "workspaceRoot": "/work/app",
+  "ownership": "owned",
   "platform": "ios",
   "deviceId": "00008110-...",
   "target": "lib/main.dart",
   "flavor": "staging",
   "mode": "debug",
   "state": "running",
+  "stale": false,
   "pid": 18342,
+  "appId": "sample_app",
   "vmService": {
-    "available": true
+    "available": true,
+    "maskedUri": "ws://127.0.0.1:.../ws"
   },
   "dtd": {
-    "available": true
+    "available": true,
+    "maskedUri": "ws://127.0.0.1:.../dtd"
   },
   "adapters": {
     "delegate": "dart_flutter_mcp",
@@ -46,7 +51,9 @@ Session は、**1 つの workspace / target / platform / device / mode / runtime
     "runtimeDriver": null
   },
   "createdAt": "2026-04-11T12:34:56Z",
-  "lastSeenAt": "2026-04-11T12:35:12Z"
+  "lastSeenAt": "2026-04-11T12:35:12Z",
+  "lastExitAt": null,
+  "lastExitCode": null
 }
 ```
 
@@ -95,7 +102,12 @@ process metadata と artifact を伴う。
 
 ## 5. Session ownership
 
-安全性のため、FlutterHelm は session を 2 種類に分けます。
+安全性のため、FlutterHelm は session を 3 種類に分けます。
+
+### Context session
+
+`session_open` が返す準備段階の session。  
+まだ process ownership を持たず、`run_app` の対象として昇格できる。
 
 ### Owned session
 
@@ -106,6 +118,15 @@ FlutterHelm 自身が起動したプロセスに紐づく。
 
 既存プロセスへ接続しただけ。  
 この場合、停止や強い mutation は制限する。
+
+### 5.1 Persistence と stale session
+
+Phase 1 では session metadata を `stateDir/sessions.json` に永続化する。  
+server 再起動後、live process handle を持たない session は `stale=true` として復元する。
+
+- session summary と app state は resource として再読可能
+- owned でも stale session に対する mutation は禁止
+- live VM service がある session のみ `get_widget_tree` を許可
 
 ## 6. Resources の位置づけ
 

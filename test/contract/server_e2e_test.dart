@@ -47,6 +47,18 @@ void main() {
       expect(
         toolNames,
         containsAll(<String>[
+          'analyze_project',
+          'attach_app',
+          'device_list',
+          'format_files',
+          'get_app_state_summary',
+          'get_logs',
+          'get_runtime_errors',
+          'get_widget_tree',
+          'resolve_symbol',
+          'run_app',
+          'run_unit_tests',
+          'run_widget_tests',
           'workspace_show',
           'workspace_set_root',
           'session_open',
@@ -121,6 +133,86 @@ void main() {
         auditLines.any((String line) => line.contains('"method":"tools/call"')),
         isTrue,
       );
+    });
+
+    test('runs sample app unit and widget tests and publishes resources', () async {
+      final sandbox = await Directory.systemTemp.createTemp('flutterhelm-e2e');
+      addTearDown(() => sandbox.delete(recursive: true));
+
+      final stateDir = Directory(p.join(sandbox.path, 'state'));
+      final sampleAppRoot = p.join(Directory.current.path, 'fixtures', 'sample_app');
+      final client = await _TestMcpClient.start(
+        repoRoot: Directory.current.path,
+        workspaceRoot: sampleAppRoot,
+        stateDir: stateDir.path,
+      );
+      addTearDown(client.close);
+
+      await client.request('initialize', <String, Object?>{
+        'protocolVersion': '2025-06-18',
+        'capabilities': <String, Object?>{
+          'roots': <String, Object?>{'listChanged': true},
+        },
+        'clientInfo': <String, Object?>{
+          'name': 'test-client',
+          'version': '1.0.0',
+        },
+      });
+      client.notify('notifications/initialized');
+
+      await client.request('tools/call', <String, Object?>{
+        'name': 'workspace_set_root',
+        'arguments': <String, Object?>{'workspaceRoot': sampleAppRoot},
+      });
+
+      final deviceList = await client.request('tools/call', <String, Object?>{
+        'name': 'device_list',
+        'arguments': <String, Object?>{},
+      });
+      final devices =
+          ((deviceList['structuredContent'] as Map<Object?, Object?>)['devices']
+                  as List<Object?>)
+              .cast<Map<Object?, Object?>>();
+      expect(devices, isNotEmpty);
+
+      final unitTests = await client.request('tools/call', <String, Object?>{
+        'name': 'run_unit_tests',
+        'arguments': <String, Object?>{},
+      });
+      expect(unitTests['isError'], isFalse);
+      final unitStructured =
+          unitTests['structuredContent'] as Map<Object?, Object?>;
+      final unitRunId = unitStructured['runId'] as String;
+      expect((unitStructured['summary'] as Map<Object?, Object?>)['failed'], 0);
+
+      final widgetTests = await client.request('tools/call', <String, Object?>{
+        'name': 'run_widget_tests',
+        'arguments': <String, Object?>{},
+      });
+      expect(widgetTests['isError'], isFalse);
+      final widgetStructured =
+          widgetTests['structuredContent'] as Map<Object?, Object?>;
+      final widgetRunId = widgetStructured['runId'] as String;
+      expect((widgetStructured['summary'] as Map<Object?, Object?>)['failed'], 0);
+
+      final resources = await client.request('resources/list');
+      final uris = (resources['resources'] as List<Object?>)
+          .cast<Map<Object?, Object?>>()
+          .map((Map<Object?, Object?> resource) => resource['uri'])
+          .toSet();
+      expect(uris, contains('test-report://$unitRunId/summary'));
+      expect(uris, contains('test-report://$widgetRunId/summary'));
+
+      final unitSummary = await client.request(
+        'resources/read',
+        <String, Object?>{'uri': 'test-report://$unitRunId/summary'},
+      );
+      final unitContents =
+          (unitSummary['contents'] as List<Object?>).single
+              as Map<Object?, Object?>;
+      final decoded =
+          jsonDecode(unitContents['text'] as String) as Map<String, Object?>;
+      expect(decoded['runId'], unitRunId);
     });
 
     test(
