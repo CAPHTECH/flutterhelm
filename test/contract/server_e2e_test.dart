@@ -53,6 +53,7 @@ void main() {
           'dependency_add',
           'dependency_remove',
           'device_list',
+          'android_debug_context',
           'format_files',
           'capture_memory_snapshot',
           'capture_timeline',
@@ -61,6 +62,8 @@ void main() {
           'get_runtime_errors',
           'get_test_results',
           'get_widget_tree',
+          'ios_debug_context',
+          'native_handoff_summary',
           'pub_search',
           'resolve_symbol',
           'run_app',
@@ -643,6 +646,313 @@ void main() {
     );
 
     test(
+      'creates iOS native handoff bundles and summaries from live and postmortem sessions',
+      () async {
+        final sandbox = await Directory.systemTemp.createTemp('flutterhelm-e2e');
+        addTearDown(() => sandbox.delete(recursive: true));
+
+        final stateDir = Directory(p.join(sandbox.path, 'state'));
+        final sampleAppRoot = p.join(
+          Directory.current.path,
+          'fixtures',
+          'sample_app',
+        );
+        final client = await _TestMcpClient.start(
+          repoRoot: Directory.current.path,
+          workspaceRoot: sampleAppRoot,
+          stateDir: stateDir.path,
+        );
+        addTearDown(client.close);
+
+        await _initializeClient(client);
+        await client.request('tools/call', <String, Object?>{
+          'name': 'workspace_set_root',
+          'arguments': <String, Object?>{'workspaceRoot': sampleAppRoot},
+        });
+
+        final running = await client.request(
+          'tools/call',
+          <String, Object?>{
+            'name': 'run_app',
+            'arguments': <String, Object?>{
+              'platform': 'ios',
+              'mode': 'debug',
+            },
+          },
+          const Duration(minutes: 8),
+        );
+        expect(running['isError'], isFalse);
+        final sessionId =
+            ((running['structuredContent'] as Map<Object?, Object?>)['sessionId'])
+                as String;
+
+        addTearDown(() async {
+          final stopResult = await client.request('tools/call', <String, Object?>{
+            'name': 'stop_app',
+            'arguments': <String, Object?>{'sessionId': sessionId},
+          });
+          if (stopResult['isError'] == true) {
+            stderr.writeln('stop_app during teardown failed: ${stopResult['structuredContent']}');
+          }
+        });
+
+        final handoff = await client.request('tools/call', <String, Object?>{
+          'name': 'ios_debug_context',
+          'arguments': <String, Object?>{
+            'sessionId': sessionId,
+            'tailLines': 50,
+          },
+        });
+        expect(handoff['isError'], isFalse);
+        final handoffStructured =
+            handoff['structuredContent'] as Map<Object?, Object?>;
+        final handoffResource =
+            handoffStructured['resource'] as Map<Object?, Object?>;
+        final handoffUri = handoffResource['uri'] as String;
+        expect(handoffUri, 'native-handoff://$sessionId/ios');
+
+        final handoffBundle = await client.request(
+          'resources/read',
+          <String, Object?>{'uri': handoffUri},
+        );
+        final handoffBody =
+            (handoffBundle['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        final handoffDecoded =
+            jsonDecode(handoffBody['text'] as String) as Map<String, Object?>;
+        expect(handoffDecoded['status'], 'ready');
+        final openPaths =
+            (handoffDecoded['openPaths'] as List<Object?>)
+                .cast<Map<Object?, Object?>>();
+        expect(
+          openPaths.any(
+            (Map<Object?, Object?> value) =>
+                (value['path'] as String).endsWith('ios/Runner.xcworkspace'),
+          ),
+          isTrue,
+        );
+        final evidenceResources =
+            (handoffDecoded['evidenceResources'] as List<Object?>)
+                .cast<Map<Object?, Object?>>();
+        expect(
+          evidenceResources.any(
+            (Map<Object?, Object?> value) =>
+                value['uri'] == 'session://$sessionId/summary',
+          ),
+          isTrue,
+        );
+        expect(
+          evidenceResources.any(
+            (Map<Object?, Object?> value) =>
+                value['uri'] == 'session://$sessionId/health',
+          ),
+          isTrue,
+        );
+        final limitations =
+            (handoffDecoded['limitations'] as List<Object?>).cast<String>();
+        expect(
+          limitations.any(
+            (String value) => value.contains('not a native debugger replacement'),
+          ),
+          isTrue,
+        );
+
+        final summary = await client.request('tools/call', <String, Object?>{
+          'name': 'native_handoff_summary',
+          'arguments': <String, Object?>{'sessionId': sessionId},
+        });
+        expect(summary['isError'], isFalse);
+        final summaryStructured =
+            summary['structuredContent'] as Map<Object?, Object?>;
+        final platforms =
+            (summaryStructured['platforms'] as List<Object?>)
+                .cast<Map<Object?, Object?>>();
+        expect(
+          platforms.any(
+            (Map<Object?, Object?> value) => value['platform'] == 'ios',
+          ),
+          isTrue,
+        );
+
+        final stopped = await client.request('tools/call', <String, Object?>{
+          'name': 'stop_app',
+          'arguments': <String, Object?>{'sessionId': sessionId},
+        });
+        expect(stopped['isError'], isFalse);
+
+        final postmortem = await client.request('tools/call', <String, Object?>{
+          'name': 'ios_debug_context',
+          'arguments': <String, Object?>{'sessionId': sessionId},
+        });
+        expect(postmortem['isError'], isFalse);
+        final postmortemBundle = await client.request(
+          'resources/read',
+          <String, Object?>{'uri': 'native-handoff://$sessionId/ios'},
+        );
+        final postmortemBody =
+            (postmortemBundle['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        final postmortemDecoded =
+            jsonDecode(postmortemBody['text'] as String) as Map<String, Object?>;
+        expect(
+          ((postmortemDecoded['session'] as Map<String, Object?>)['state']),
+          'stopped',
+        );
+      },
+      timeout: const Timeout(Duration(minutes: 12)),
+    );
+
+    test(
+      'creates Android native handoff bundles for synthetic workspaces and reports unavailable when missing',
+      () async {
+        final sandbox = await Directory.systemTemp.createTemp('flutterhelm-e2e');
+        addTearDown(() => sandbox.delete(recursive: true));
+
+        final androidWorkspace = Directory(p.join(sandbox.path, 'android-workspace'));
+        await androidWorkspace.create(recursive: true);
+        await _writeTextFile(
+          p.join(androidWorkspace.path, 'pubspec.yaml'),
+          'name: android_workspace\n',
+        );
+        await _writeTextFile(
+          p.join(
+            androidWorkspace.path,
+            'android',
+            'app',
+            'src',
+            'main',
+            'AndroidManifest.xml',
+          ),
+          '<manifest package="com.example.androidworkspace"></manifest>\n',
+        );
+        await _writeTextFile(
+          p.join(androidWorkspace.path, 'android', 'app', 'build.gradle'),
+          'plugins {}\n',
+        );
+        await _writeTextFile(
+          p.join(androidWorkspace.path, 'android', 'settings.gradle'),
+          'rootProject.name = "android_workspace"\n',
+        );
+        await _writeTextFile(
+          p.join(androidWorkspace.path, 'android', 'gradle.properties'),
+          'org.gradle.jvmargs=-Xmx1536M\n',
+        );
+
+        final stateDir = Directory(p.join(sandbox.path, 'android-state'));
+        final client = await _TestMcpClient.start(
+          repoRoot: Directory.current.path,
+          workspaceRoot: androidWorkspace.path,
+          stateDir: stateDir.path,
+        );
+        addTearDown(client.close);
+
+        await _initializeClient(client);
+        await client.request('tools/call', <String, Object?>{
+          'name': 'workspace_set_root',
+          'arguments': <String, Object?>{'workspaceRoot': androidWorkspace.path},
+        });
+
+        final opened = await client.request('tools/call', <String, Object?>{
+          'name': 'session_open',
+          'arguments': <String, Object?>{},
+        });
+        final sessionId =
+            ((opened['structuredContent'] as Map<Object?, Object?>)['sessionId'])
+                as String;
+
+        final androidContext = await client.request(
+          'tools/call',
+          <String, Object?>{
+            'name': 'android_debug_context',
+            'arguments': <String, Object?>{'sessionId': sessionId},
+          },
+        );
+        expect(androidContext['isError'], isFalse);
+
+        final androidBundle = await client.request(
+          'resources/read',
+          <String, Object?>{'uri': 'native-handoff://$sessionId/android'},
+        );
+        final androidBody =
+            (androidBundle['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        final androidDecoded =
+            jsonDecode(androidBody['text'] as String) as Map<String, Object?>;
+        expect(androidDecoded['status'], 'ready');
+        final androidOpenPaths =
+            (androidDecoded['openPaths'] as List<Object?>)
+                .cast<Map<Object?, Object?>>();
+        expect(androidOpenPaths, isNotEmpty);
+
+        final androidSummary = await client.request(
+          'tools/call',
+          <String, Object?>{
+            'name': 'native_handoff_summary',
+            'arguments': <String, Object?>{'sessionId': sessionId},
+          },
+        );
+        expect(androidSummary['isError'], isFalse);
+        final androidPlatforms =
+            (((androidSummary['structuredContent'] as Map<Object?, Object?>)['platforms'])
+                    as List<Object?>)
+                .cast<Map<Object?, Object?>>();
+        expect(
+          androidPlatforms.any(
+            (Map<Object?, Object?> value) => value['platform'] == 'android',
+          ),
+          isTrue,
+        );
+
+        final missingWorkspace = Directory(p.join(sandbox.path, 'missing-android'));
+        await missingWorkspace.create(recursive: true);
+        await _writeTextFile(
+          p.join(missingWorkspace.path, 'pubspec.yaml'),
+          'name: missing_android\n',
+        );
+
+        final missingStateDir = Directory(p.join(sandbox.path, 'missing-state'));
+        final missingClient = await _TestMcpClient.start(
+          repoRoot: Directory.current.path,
+          workspaceRoot: missingWorkspace.path,
+          stateDir: missingStateDir.path,
+        );
+        addTearDown(missingClient.close);
+
+        await _initializeClient(missingClient);
+        await missingClient.request('tools/call', <String, Object?>{
+          'name': 'workspace_set_root',
+          'arguments': <String, Object?>{'workspaceRoot': missingWorkspace.path},
+        });
+        final missingOpened = await missingClient.request('tools/call', <String, Object?>{
+          'name': 'session_open',
+          'arguments': <String, Object?>{},
+        });
+        final missingSessionId =
+            ((missingOpened['structuredContent'] as Map<Object?, Object?>)['sessionId'])
+                as String;
+
+        final missingAndroidContext = await missingClient.request(
+          'tools/call',
+          <String, Object?>{
+            'name': 'android_debug_context',
+            'arguments': <String, Object?>{'sessionId': missingSessionId},
+          },
+        );
+        expect(missingAndroidContext['isError'], isFalse);
+        final missingBundle = await missingClient.request(
+          'resources/read',
+          <String, Object?>{'uri': 'native-handoff://$missingSessionId/android'},
+        );
+        final missingBody =
+            (missingBundle['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        final missingDecoded =
+            jsonDecode(missingBody['text'] as String) as Map<String, Object?>;
+        expect(missingDecoded['status'], 'unavailable');
+      },
+    );
+
+    test(
       'returns structured tool errors when no active root is available',
       () async {
         final sandbox = await Directory.systemTemp.createTemp(
@@ -719,6 +1029,11 @@ Future<String> _copyDirectory(String sourcePath, String targetPath) async {
     }
   }
   return target.path;
+}
+
+Future<void> _writeTextFile(String path, String contents) async {
+  await File(path).parent.create(recursive: true);
+  await File(path).writeAsString(contents);
 }
 
 class _TestMcpClient {

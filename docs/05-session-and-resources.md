@@ -188,6 +188,68 @@ public profiling resource は summary JSON を返し、raw heap snapshot は ses
 - `native-handoff://<session-id>/ios`
 - `native-handoff://<session-id>/android`
 
+native handoff resource は JSON manifest です。zip export ではなく、既存 resource と native project path を束ねます。
+
+```json
+{
+  "sessionId": "sess_01H...",
+  "platform": "ios",
+  "status": "ready",
+  "workspaceRoot": "/work/app",
+  "summary": {
+    "sessionState": "running",
+    "ownership": "owned",
+    "stale": false,
+    "availablePlatforms": ["ios"],
+    "openPathCount": 3,
+    "evidenceCount": 6,
+    "hypothesisCount": 2
+  },
+  "openPaths": [
+    {
+      "path": "/work/app/ios/Runner.xcworkspace",
+      "label": "Xcode workspace",
+      "reason": "Open this workspace in Xcode for native debugging and signing context."
+    }
+  ],
+  "evidenceResources": [
+    {
+      "uri": "session://sess_01H/summary",
+      "mimeType": "application/json",
+      "title": "Session summary"
+    },
+    {
+      "uri": "runtime-errors://sess_01H/current",
+      "mimeType": "application/json",
+      "title": "Runtime errors"
+    }
+  ],
+  "fileHints": [
+    {
+      "path": "/work/app/ios/Runner/Info.plist",
+      "label": "Info.plist",
+      "reason": "Check permissions, bundle metadata, and local network related keys."
+    }
+  ],
+  "hypotheses": [
+    "VM service was unavailable for this iOS session; on iOS 14+ verify that the Local Network permission prompt was allowed and retry the attach/debug flow."
+  ],
+  "nextSteps": [
+    "Open ios/Runner.xcworkspace in Xcode and reproduce with the attached Flutter logs beside you."
+  ],
+  "limitations": [
+    "FlutterHelm is not a native debugger replacement; use Xcode for LLDB, signing, and device-level native inspection."
+  ],
+  "generatedAt": "2026-04-12T00:00:00Z"
+}
+```
+
+`status` は次の 3 値です。
+
+- `ready`: native project と handoff evidence が揃っている
+- `partial`: native project はあるが evidence が限定的
+- `unavailable`: 対応 native project が workspace に見つからない
+
 ## 8. Resource metadata
 
 各 resource は最低限以下を持ちます。

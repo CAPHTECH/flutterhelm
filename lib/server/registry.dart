@@ -684,7 +684,16 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Create an iOS handoff bundle.',
       workflow: 'platform_bridge',
       risk: RiskClass.readOnly,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'tailLines': <String, Object?>{'type': 'integer', 'minimum': 1, 'maximum': 500},
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'android_debug_context',
@@ -692,7 +701,16 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Create an Android handoff bundle.',
       workflow: 'platform_bridge',
       risk: RiskClass.readOnly,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'tailLines': <String, Object?>{'type': 'integer', 'minimum': 1, 'maximum': 500},
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'native_handoff_summary',
@@ -700,7 +718,19 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Summarize native debugging context.',
       workflow: 'platform_bridge',
       risk: RiskClass.readOnly,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'platform': <String, Object?>{
+            'type': 'string',
+            'enum': <String>['ios', 'android'],
+          },
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
   ];
 }

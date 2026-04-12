@@ -38,7 +38,8 @@ type CheckName =
   | "phase1-tool-exposure"
   | "phase1-sample-app-flow"
   | "phase1-runtime-overflow-flow"
-  | "phase3-profiling-flow";
+  | "phase3-profiling-flow"
+  | "phase4-platform-bridge-flow";
 
 interface ContractCaseInput {
   checks?: CheckName[];
@@ -541,7 +542,7 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
       ["tests", true],
       ["runtime_interaction", false],
       ["profiling", true],
-      ["platform_bridge", false],
+      ["platform_bridge", true],
     ] as const) {
       const status = requireObject(workflowStatus[workflow], `workflowStatus.${workflow}`);
       if (status.implemented !== implemented) {
@@ -551,6 +552,20 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
     const profiling = requireObject(experimental.profiling, "capabilities.experimental.profiling");
     if (profiling.backend !== "vm_service" || profiling.ownershipPolicy !== "owned_only") {
       throw new Error(`Unexpected profiling capability metadata: ${JSON.stringify(profiling)}`);
+    }
+    const platformBridge = requireObject(experimental.platformBridge, "capabilities.experimental.platformBridge");
+    if (
+      platformBridge.mode !== "handoff_only"
+      || platformBridge.ideAutomation !== false
+      || platformBridge.defaultEnabled !== true
+    ) {
+      throw new Error(`Unexpected platform bridge capability metadata: ${JSON.stringify(platformBridge)}`);
+    }
+    const supportedPlatforms = requireArray(platformBridge.supportedPlatforms, "platformBridge.supportedPlatforms");
+    for (const platform of ["ios", "android"]) {
+      if (!supportedPlatforms.includes(platform)) {
+        throw new Error(`platformBridge.supportedPlatforms is missing ${platform}`);
+      }
     }
 
     const toolsList = await client.request("tools/list");
@@ -567,12 +582,15 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
       "dependency_add",
       "dependency_remove",
       "device_list",
+      "android_debug_context",
       "format_files",
       "get_app_state_summary",
       "get_logs",
       "get_runtime_errors",
       "get_test_results",
       "get_widget_tree",
+      "ios_debug_context",
+      "native_handoff_summary",
       "pub_search",
       "resolve_symbol",
       "run_app",
@@ -1049,6 +1067,211 @@ async function checkPhase3ProfilingFlow(repoRoot: string): Promise<void> {
   });
 }
 
+async function checkPhase4PlatformBridgeFlow(repoRoot: string): Promise<void> {
+  await withSampleAppClient(repoRoot, async (fixture, client) => {
+    await client.initialize();
+    await client.callTool("workspace_set_root", {
+      workspaceRoot: fixture.workspaceRoot,
+    });
+
+    const running = await client.callTool("run_app", {
+      platform: "ios",
+      mode: "debug",
+    });
+    if (running.isError === true) {
+      const error = requireObject(requireObject(running.structuredContent, "run_app error").error, "run_app structured error");
+      throw new Error(`run_app failed: ${String(error.code)}: ${String(error.message)}`);
+    }
+
+    const runningStructured = requireObject(running.structuredContent, "run_app.structuredContent");
+    const sessionId = requireString(runningStructured.sessionId, "run_app.sessionId");
+
+    try {
+      const iosContext = await client.callTool("ios_debug_context", {
+        sessionId,
+        tailLines: 120,
+      });
+      if (iosContext.isError === true) {
+        throw new Error(`ios_debug_context failed: ${JSON.stringify(iosContext.structuredContent)}`);
+      }
+      const iosStructured = requireObject(iosContext.structuredContent, "ios_debug_context.structuredContent");
+      if (iosStructured.status !== "ready") {
+        throw new Error(`ios_debug_context returned unexpected status: ${JSON.stringify(iosStructured)}`);
+      }
+
+      const bundleResource = requireObject(iosStructured.resource, "ios_debug_context.resource");
+      const bundleUri = requireString(bundleResource.uri, "ios_debug_context.resource.uri");
+      if (bundleUri !== `native-handoff://${sessionId}/ios`) {
+        throw new Error(`ios_debug_context returned unexpected resource uri ${bundleUri}`);
+      }
+
+      const bundleRead = await client.request("resources/read", { uri: bundleUri });
+      const bundleContents = requireArray(bundleRead.contents, "native handoff contents");
+      const bundleBody = requireObject(bundleContents[0], "native handoff content");
+      const bundle = JSON.parse(requireString(bundleBody.text, "native handoff text")) as Record<string, unknown>;
+      if (bundle.status !== "ready") {
+        throw new Error(`iOS native handoff bundle should be ready: ${JSON.stringify(bundle)}`);
+      }
+      const openPaths = requireArray(bundle.openPaths, "bundle.openPaths")
+        .map((value) => requireObject(value, "bundle open path"));
+      if (!openPaths.some((value) => requireString(value.path, "open path").endsWith("/ios/Runner.xcworkspace"))) {
+        throw new Error(`iOS native handoff bundle is missing Runner.xcworkspace: ${JSON.stringify(openPaths)}`);
+      }
+      const evidenceResources = requireArray(bundle.evidenceResources, "bundle.evidenceResources")
+        .map((value) => requireObject(value, "bundle evidence"));
+      const evidenceUris = evidenceResources.map((value) => requireString(value.uri, "bundle evidence uri"));
+      for (const expected of [`session://${sessionId}/summary`, `session://${sessionId}/health`]) {
+        if (!evidenceUris.includes(expected)) {
+          throw new Error(`iOS native handoff bundle is missing evidence resource ${expected}`);
+        }
+      }
+      const limitations = requireArray(bundle.limitations, "bundle.limitations")
+        .map((value) => requireString(value, "bundle limitation"));
+      if (!limitations.some((value) => value.includes("not a native debugger replacement"))) {
+        throw new Error(`iOS native handoff bundle is missing the native debugger limitation: ${JSON.stringify(limitations)}`);
+      }
+
+      const handoffSummary = await client.callTool("native_handoff_summary", {
+        sessionId,
+      });
+      if (handoffSummary.isError === true) {
+        throw new Error(`native_handoff_summary failed: ${JSON.stringify(handoffSummary.structuredContent)}`);
+      }
+      const summaryStructured = requireObject(
+        handoffSummary.structuredContent,
+        "native_handoff_summary.structuredContent",
+      );
+      const platforms = requireArray(summaryStructured.platforms, "native_handoff_summary.platforms")
+        .map((value) => requireObject(value, "native handoff platform summary"));
+      if (!platforms.some((value) => value.platform === "ios")) {
+        throw new Error(`native_handoff_summary did not include ios: ${JSON.stringify(platforms)}`);
+      }
+      const summaryResources = requireArray(summaryStructured.resources, "native_handoff_summary.resources")
+        .map((value) => requireObject(value, "native handoff resource"))
+        .map((value) => requireString(value.uri, "native handoff summary resource uri"));
+      if (!summaryResources.includes(`native-handoff://${sessionId}/ios`)) {
+        throw new Error(`native_handoff_summary did not include the iOS bundle resource: ${JSON.stringify(summaryResources)}`);
+      }
+    } finally {
+      await client.callTool("stop_app", {
+        sessionId,
+      });
+    }
+
+    const postmortem = await client.callTool("ios_debug_context", {
+      sessionId,
+      tailLines: 60,
+    });
+    if (postmortem.isError === true) {
+      throw new Error(`ios_debug_context should work postmortem: ${JSON.stringify(postmortem.structuredContent)}`);
+    }
+    const postmortemStructured = requireObject(postmortem.structuredContent, "postmortem ios_debug_context");
+    if (!["ready", "partial"].includes(requireString(postmortemStructured.status, "postmortem status"))) {
+      throw new Error(`postmortem ios_debug_context returned unexpected status: ${JSON.stringify(postmortemStructured)}`);
+    }
+  });
+
+  const androidFixture = await createPhase0Fixture();
+  const androidClient = await Phase0HarnessClient.start(
+    repoRoot,
+    androidFixture.stateDir,
+    [androidFixture.workspaceRoot],
+  );
+  try {
+    await mkdir(resolve(androidFixture.workspaceRoot, "android", "app", "src", "main"), { recursive: true });
+    await writeFile(
+      resolve(androidFixture.workspaceRoot, "android", "app", "src", "main", "AndroidManifest.xml"),
+      "<manifest package=\"dev.flutterhelm.synthetic\"></manifest>\n",
+    );
+    await writeFile(resolve(androidFixture.workspaceRoot, "android", "app", "build.gradle"), "plugins {}\n");
+    await writeFile(resolve(androidFixture.workspaceRoot, "android", "settings.gradle"), "include(':app')\n");
+    await writeFile(resolve(androidFixture.workspaceRoot, "android", "gradle.properties"), "org.gradle.jvmargs=-Xmx1536m\n");
+
+    await androidClient.initialize();
+    await androidClient.callTool("workspace_set_root", {
+      workspaceRoot: androidFixture.workspaceRoot,
+    });
+    const opened = await androidClient.callTool("session_open", {
+      workspaceRoot: androidFixture.workspaceRoot,
+    });
+    const openedStructured = requireObject(opened.structuredContent, "android session_open.structuredContent");
+    const sessionId = requireString(openedStructured.sessionId, "android session_open.sessionId");
+
+    const androidContext = await androidClient.callTool("android_debug_context", {
+      sessionId,
+    });
+    if (androidContext.isError === true) {
+      throw new Error(`android_debug_context failed: ${JSON.stringify(androidContext.structuredContent)}`);
+    }
+    const androidStructured = requireObject(androidContext.structuredContent, "android_debug_context.structuredContent");
+    if (androidStructured.status !== "ready") {
+      throw new Error(`android_debug_context should be ready for synthetic workspace: ${JSON.stringify(androidStructured)}`);
+    }
+
+    const bundleRead = await androidClient.request("resources/read", {
+      uri: `native-handoff://${sessionId}/android`,
+    });
+    const bundleContents = requireArray(bundleRead.contents, "android native handoff contents");
+    const bundleBody = requireObject(bundleContents[0], "android native handoff content");
+    const bundle = JSON.parse(requireString(bundleBody.text, "android native handoff text")) as Record<string, unknown>;
+    if (bundle.status !== "ready") {
+      throw new Error(`android native handoff bundle should be ready: ${JSON.stringify(bundle)}`);
+    }
+
+    const handoffSummary = await androidClient.callTool("native_handoff_summary", {
+      sessionId,
+      platform: "android",
+    });
+    if (handoffSummary.isError === true) {
+      throw new Error(`native_handoff_summary(android) failed: ${JSON.stringify(handoffSummary.structuredContent)}`);
+    }
+    const summaryStructured = requireObject(
+      handoffSummary.structuredContent,
+      "native_handoff_summary(android).structuredContent",
+    );
+    const resources = requireArray(summaryStructured.resources, "native_handoff_summary(android).resources")
+      .map((value) => requireObject(value, "android native handoff summary resource"))
+      .map((value) => requireString(value.uri, "android native handoff summary resource uri"));
+    if (!resources.includes(`native-handoff://${sessionId}/android`)) {
+      throw new Error(`native_handoff_summary(android) did not include the bundle resource: ${JSON.stringify(resources)}`);
+    }
+  } finally {
+    await androidClient.close();
+    await rm(androidFixture.sandboxDir, { recursive: true, force: true });
+  }
+
+  const missingAndroidFixture = await createPhase0Fixture();
+  const missingAndroidClient = await Phase0HarnessClient.start(
+    repoRoot,
+    missingAndroidFixture.stateDir,
+    [missingAndroidFixture.workspaceRoot],
+  );
+  try {
+    await missingAndroidClient.initialize();
+    await missingAndroidClient.callTool("workspace_set_root", {
+      workspaceRoot: missingAndroidFixture.workspaceRoot,
+    });
+    const opened = await missingAndroidClient.callTool("session_open", {
+      workspaceRoot: missingAndroidFixture.workspaceRoot,
+    });
+    const openedStructured = requireObject(opened.structuredContent, "missing android session_open.structuredContent");
+    const sessionId = requireString(openedStructured.sessionId, "missing android session_open.sessionId");
+    const androidContext = await missingAndroidClient.callTool("android_debug_context", {
+      sessionId,
+    });
+    if (androidContext.isError === true) {
+      throw new Error(`android_debug_context should return an unavailable bundle instead of failing: ${JSON.stringify(androidContext.structuredContent)}`);
+    }
+    const androidStructured = requireObject(androidContext.structuredContent, "missing android android_debug_context.structuredContent");
+    if (androidStructured.status !== "unavailable") {
+      throw new Error(`android_debug_context should return unavailable when android/ is missing: ${JSON.stringify(androidStructured)}`);
+    }
+  } finally {
+    await missingAndroidClient.close();
+    await rm(missingAndroidFixture.sandboxDir, { recursive: true, force: true });
+  }
+}
+
 async function checkMkDocsBuild(repoRoot: string, harnessRoot: string): Promise<void> {
   const docsPython = resolveDocsPython(harnessRoot);
   if (!(await pathExists(docsPython))) {
@@ -1134,7 +1357,7 @@ async function checkWorkflowGroups(repoRoot: string): Promise<void> {
     ["tests", "Yes"],
     ["runtime_interaction", "No"],
     ["profiling", "Yes"],
-    ["platform_bridge", "No"],
+    ["platform_bridge", "Yes"],
   ]);
 
   if (rows.length !== expected.size) {
@@ -1429,6 +1652,7 @@ const CHECKS: Record<CheckName, (repoRoot: string, harnessRoot: string) => Promi
   "phase1-sample-app-flow": (repoRoot) => checkPhase1SampleAppFlow(repoRoot),
   "phase1-runtime-overflow-flow": (repoRoot) => checkPhase1RuntimeOverflowFlow(repoRoot),
   "phase3-profiling-flow": (repoRoot) => checkPhase3ProfilingFlow(repoRoot),
+  "phase4-platform-bridge-flow": (repoRoot) => checkPhase4PlatformBridgeFlow(repoRoot),
 };
 
 async function main(): Promise<void> {

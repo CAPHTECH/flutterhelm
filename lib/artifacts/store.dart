@@ -39,6 +39,9 @@ class ArtifactStore {
   String sessionMemoryUri(String sessionId, String snapshotId) =>
       'memory://$sessionId/$snapshotId';
 
+  String sessionNativeHandoffUri(String sessionId, String platform) =>
+      'native-handoff://$sessionId/$platform';
+
   String testSummaryUri(String runId) => 'test-report://$runId/summary';
 
   String testDetailsUri(String runId) => 'test-report://$runId/details';
@@ -149,6 +152,17 @@ class ArtifactStore {
     } finally {
       await sink.close();
     }
+  }
+
+  Future<void> writeSessionNativeHandoff({
+    required String sessionId,
+    required String platform,
+    required Map<String, Object?> payload,
+  }) {
+    return _writeJson(
+      File(p.join(sessionArtifactsDir(sessionId), 'native-handoff-$platform.json')),
+      payload,
+    );
   }
 
   Future<void> writeTestRunSummary({
@@ -368,6 +382,21 @@ class ArtifactStore {
           name: 'session.memory.$sessionId.$snapshotId',
           title: 'Memory snapshot $sessionId $snapshotId',
           description: 'Captured memory summary and heap snapshot metadata.',
+          mimeType: 'application/json',
+          sessionId: sessionId,
+        ));
+        continue;
+      }
+
+      final nativeHandoffMatch = RegExp(r'native-handoff-(ios|android)\.json$').firstMatch(entity.path);
+      if (nativeHandoffMatch != null) {
+        final platform = nativeHandoffMatch.group(1)!;
+        resources.add(await _descriptorForFile(
+          file: entity,
+          uri: sessionNativeHandoffUri(sessionId, platform),
+          name: 'session.nativeHandoff.$sessionId.$platform',
+          title: 'Native handoff $sessionId $platform',
+          description: 'Prepared native IDE handoff bundle.',
           mimeType: 'application/json',
           sessionId: sessionId,
         ));
@@ -612,6 +641,17 @@ class ArtifactStore {
     if (memoryMatch != null) {
       return _ResolvedStoredFile(
         path: p.join(sessionArtifactsDir(memoryMatch.group(1)!), 'memory-${memoryMatch.group(2)}.json'),
+        mimeType: 'application/json',
+      );
+    }
+
+    final nativeHandoffMatch = RegExp(r'^native-handoff://([^/]+)/(ios|android)$').firstMatch(uri);
+    if (nativeHandoffMatch != null) {
+      return _ResolvedStoredFile(
+        path: p.join(
+          sessionArtifactsDir(nativeHandoffMatch.group(1)!),
+          'native-handoff-${nativeHandoffMatch.group(2)}.json',
+        ),
         mimeType: 'application/json',
       );
     }

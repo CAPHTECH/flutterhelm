@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutterhelm/artifacts/store.dart';
+import 'package:flutterhelm/platform_bridge/support.dart';
 import 'package:flutterhelm/server/errors.dart';
 import 'package:flutterhelm/sessions/session.dart';
 import 'package:flutterhelm/sessions/session_store.dart';
@@ -572,6 +573,9 @@ class LauncherToolService {
       'mode': session.mode,
       'pid': session.pid,
       'profileActive': session.profileActive,
+      'nativeBridgeAvailablePlatforms': detectNativeBridgePlatformsSync(
+        session.workspaceRoot,
+      ),
       'vmService': <String, Object?>{
         'available': session.vmServiceAvailable,
         'maskedUri': session.vmServiceMaskedUri,

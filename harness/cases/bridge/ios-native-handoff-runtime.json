@@ -1,0 +1,15 @@
+{
+  "id": "ios-native-handoff-runtime",
+  "mode": "software",
+  "tags": ["bridge"],
+  "input": {
+    "checks": ["phase4-platform-bridge-flow"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": [
+      "check:phase4-platform-bridge-flow:ok",
+      "summary:ios-native-handoff-runtime"
+    ]
+  }
+}

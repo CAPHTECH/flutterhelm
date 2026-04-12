@@ -137,10 +137,16 @@ Flutter 公式 docs にある通り、native code debugging は iOS/macOS なら
 したがって FlutterHelm は native bridge を **handoff context generator** として扱います。  
 「Xcode を完全制御する」「Android Studio を自動操作する」は初期スコープに入れません。
 
+current implementation では `platform_bridge` workflow は既定で有効ですが、許可されるのは read-only handoff bundle 生成だけです。
+native project が見つからない場合も destructive failure にはせず、`status=unavailable` の bundle と次の確認手順を返します。
+
 ## 10. iOS-specific Safety Note
 
 iOS 14+ では local network permission を許可しないと hot reload や DevTools が動かないことがあります。  
 このため、iOS session の attach 不全を単純な tool failure と扱うのは危険です。FlutterHelm は `ios_debug_context` で、permission-related hypothesis を診断メモに含めるべきです。
+
+この診断は heuristic であり、OS permission state の authoritative source ではありません。
+FlutterHelm は `Info.plist`、Bonjour 設定、session health、recent logs を材料に hypothesis を提示し、最終確認は Xcode / iOS Settings に委ねます。
 
 ## 11. Audit Log
 
@@ -180,6 +186,7 @@ iOS 14+ では local network permission を許可しないと hot reload や Dev
 | attached process 誤停止 | 他ツール起動 app の kill | ownership rule |
 | profiling 誤期待 | debug mode で誤った性能判断 | profile mode guidance + session health |
 | attached profiling | attach 済み app に対する重い capture | owned-session only policy |
+| native debugger 置換誤解 | FlutterHelm だけで iOS/Android deep debug できると誤認 | handoff-only UX + bundle limitations |
 
 ## 14. 結論
 

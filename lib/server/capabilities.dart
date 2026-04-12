@@ -18,6 +18,12 @@ Map<String, Object?> buildServerCapabilities({
         'ownershipPolicy': 'owned_only',
         'dtdRequired': false,
       },
+      'platformBridge': const <String, Object?>{
+        'mode': 'handoff_only',
+        'ideAutomation': false,
+        'supportedPlatforms': <String>['ios', 'android'],
+        'defaultEnabled': true,
+      },
     },
   };
 }

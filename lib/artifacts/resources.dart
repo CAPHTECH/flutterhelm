@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/config/config.dart';
+import 'package:flutterhelm/platform_bridge/support.dart';
 import 'package:flutterhelm/policies/roots.dart';
 import 'package:flutterhelm/server/errors.dart';
 import 'package:flutterhelm/sessions/session.dart';
@@ -281,6 +282,9 @@ class ResourceCatalog {
       'dtdAvailable': session.dtdAvailable,
       'backend': 'vm_service',
       'profileActive': session.profileActive,
+      'nativeBridgeAvailablePlatforms': detectNativeBridgePlatformsSync(
+        session.workspaceRoot,
+      ),
     };
   }
 }

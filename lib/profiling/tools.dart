@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutterhelm/artifacts/store.dart';
+import 'package:flutterhelm/platform_bridge/support.dart';
 import 'package:flutterhelm/runtime/vm_service_support.dart';
 import 'package:flutterhelm/server/errors.dart';
 import 'package:flutterhelm/sessions/session.dart';
@@ -456,6 +457,9 @@ class ProfilingToolService {
       'mode': session.mode,
       'pid': session.pid,
       'profileActive': session.profileActive,
+      'nativeBridgeAvailablePlatforms': detectNativeBridgePlatformsSync(
+        session.workspaceRoot,
+      ),
       'vmService': <String, Object?>{
         'available': session.vmServiceAvailable,
         'maskedUri': session.vmServiceMaskedUri,

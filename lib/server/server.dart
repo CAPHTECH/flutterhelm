@@ -6,6 +6,7 @@ import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/artifacts/resources.dart';
 import 'package:flutterhelm/config/config.dart';
 import 'package:flutterhelm/launcher/tools.dart';
+import 'package:flutterhelm/platform_bridge/tools.dart';
 import 'package:flutterhelm/policies/approvals.dart';
 import 'package:flutterhelm/policies/audit.dart';
 import 'package:flutterhelm/policies/risk.dart';
@@ -81,6 +82,7 @@ class FlutterHelmServer {
     required this.launcherTools,
     required this.runtimeTools,
     required this.profilingTools,
+    required this.nativeBridgeTools,
     required this.testTools,
     required String logLevel,
     required ServerState state,
@@ -102,6 +104,7 @@ class FlutterHelmServer {
   final LauncherToolService launcherTools;
   final RuntimeToolService runtimeTools;
   final ProfilingToolService profilingTools;
+  final NativeBridgeToolService nativeBridgeTools;
   final TestToolService testTools;
   final String _logLevel;
 
@@ -159,6 +162,10 @@ class FlutterHelmServer {
         artifactStore: artifactStore,
       ),
       profilingTools: ProfilingToolService(
+        sessionStore: sessionStore,
+        artifactStore: artifactStore,
+      ),
+      nativeBridgeTools: NativeBridgeToolService(
         sessionStore: sessionStore,
         artifactStore: artifactStore,
       ),
@@ -445,7 +452,7 @@ class FlutterHelmServer {
         'version': flutterHelmVersion,
       },
       'instructions':
-          'Phase 3 server: use tools for workspace/package/run/test orchestration and vm_service-backed profiling; use resources for logs, widget trees, runtime errors, reports, coverage, session health, and profiling captures.',
+          'Phase 4 server: use tools for workspace/package/run/test orchestration, vm_service-backed profiling, and native handoff generation; use resources for logs, widget trees, runtime errors, reports, coverage, session health, profiling captures, and native handoff bundles.',
     };
   }
 
@@ -491,6 +498,8 @@ class FlutterHelmServer {
             'implementedWorkflows': _implementedWorkflows(),
             'profilingBackend': 'vm_service',
             'profilingOwnershipPolicy': 'owned_only',
+            'platformBridgeMode': 'handoff_only',
+            'platformBridgeSupportedPlatforms': const <String>['ios', 'android'],
             'resources': resources
                 .where(
                   (ResourceDescriptor resource) =>
@@ -1006,6 +1015,55 @@ class FlutterHelmServer {
             sessionId: currentSessionId,
             resourceLinks: _resourceLinksFromPayload(<Object?>[overlay['resource']]),
           );
+        case 'ios_debug_context':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final iosTailLines = arguments['tailLines'] as int? ?? 200;
+          final iosContext = await nativeBridgeTools.iosDebugContext(
+            sessionId: currentSessionId,
+            tailLines: iosTailLines < 1 ? 1 : (iosTailLines > 500 ? 500 : iosTailLines),
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'iOS native handoff bundle prepared for session $currentSessionId.',
+            structuredContent: iosContext,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[iosContext['resource']]),
+          );
+        case 'android_debug_context':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final androidTailLines = arguments['tailLines'] as int? ?? 200;
+          final androidContext = await nativeBridgeTools.androidDebugContext(
+            sessionId: currentSessionId,
+            tailLines: androidTailLines < 1
+                ? 1
+                : (androidTailLines > 500 ? 500 : androidTailLines),
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Android native handoff bundle prepared for session $currentSessionId.',
+            structuredContent: androidContext,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[androidContext['resource']]),
+          );
+        case 'native_handoff_summary':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final handoffSummary = await nativeBridgeTools.nativeHandoffSummary(
+            sessionId: currentSessionId,
+            platform: arguments['platform'] as String?,
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Native handoff summary prepared for session $currentSessionId.',
+            structuredContent: handoffSummary,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(handoffSummary['resources']),
+          );
         case 'run_unit_tests':
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
             arguments['workspaceRoot'] as String?,
@@ -1090,7 +1148,7 @@ class FlutterHelmServer {
           throw FlutterHelmToolError(
             code: 'TOOL_NOT_IMPLEMENTED',
             category: 'internal',
-            message: 'Tool not implemented in Phase 3: ${definition.name}',
+            message: 'Tool not implemented in Phase 4: ${definition.name}',
             retryable: false,
           );
       }

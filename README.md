@@ -16,13 +16,13 @@ FlutterHelm は、これらを置き換えるものではありません。
 ## ステータス
 
 - 状態: **Local alpha implementation**
-- 実装: **Phase 3 profiling core is available in this repository**
+- 実装: **Phase 4 platform bridge core is available in this repository**
 - 実装前提: MCP client は最低でも **Tools** と **Resources** を扱えること
 - 推奨: **Roots** を扱えること
 - 初期 transport: **stdio-first**
-- 主要スコープ: Flutter ローカル開発、実行中アプリの観測、テスト、profiling、限定的な runtime interaction
+- 主要スコープ: Flutter ローカル開発、実行中アプリの観測、テスト、profiling、native handoff
 
-現在コードで実装されているのは Phase 3 のローカル反復面です。
+現在コードで実装されているのは Phase 4 のローカル反復面です。
 
 - `workspace_discover`
 - `analyze_project`
@@ -53,11 +53,15 @@ FlutterHelm は、これらを置き換えるものではありません。
 - `capture_timeline`
 - `capture_memory_snapshot`
 - `toggle_performance_overlay`
+- `ios_debug_context`
+- `android_debug_context`
+- `native_handoff_summary`
 - `serverInfo` / capability negotiation
 
 dependency mutation は replay token approval を通して実行され、unit/widget/integration test は report/coverage resource を返します。
 profiling は `vm_service` backend で動作し、`cpu://`, `timeline://`, `memory://`, `session://<id>/health` を返します。profiling mutation は owned session のみ許可され、local iOS simulator では debug session での検証を既定にしつつ `profile` mode を推奨します。
-未実装なのは native bridge / runtime interaction です。
+platform bridge は handoff-only で動作し、`native-handoff://<session-id>/ios|android` bundle を返します。これは native debugger を置き換えるものではなく、Xcode / Android Studio に持ち込むための文脈束です。
+未実装なのは runtime interaction です。
 session metadata は `stateDir/sessions.json` に永続化され、artifact は `stateDir/artifacts/` に保存されます。live process handle 自体は process lifetime のみです。
 
 ## なぜ別レイヤが必要か
@@ -122,9 +126,8 @@ enabledWorkflows:
 以下は opt-in とする想定です。
 
 - `runtime_interaction`
-- `platform_bridge`
 
-current implementation では `profiling` workflow も既定で有効です。
+current implementation では `profiling` と `platform_bridge` workflow も既定で有効です。
 
 ## 想定する最小セットアップ
 
@@ -179,10 +182,11 @@ mise exec -- pnpm -C harness smoke
 mise exec -- pnpm -C harness contracts
 mise exec -- pnpm -C harness runtime
 mise exec -- pnpm -C harness profiling
+mise exec -- pnpm -C harness bridge
 mise exec -- pnpm -C harness qa
 ```
 
 `bootstrap` は `harness/.venv-docs` に MkDocs を導入するため、global な `mkdocs` install は不要です。  
 `smoke` / `contracts` / `runtime` を回す前に `mise trust && mise install && mise exec -- dart pub get` を済ませてください。  
 report は `harness/reports/`、QA trace は `harness/traces/` に残ります。
-`contracts` は package approval replay / coverage readback まで、`runtime` は macOS + Xcode simulator 前提で overflow 診断と integration test まで見ます。`profiling` は同じく local simulator 上で VM service-backed profiling capture と session health を見ます。
+`contracts` は package approval replay / coverage readback / platform bridge exposure まで、`runtime` は macOS + Xcode simulator 前提で overflow 診断と integration test まで見ます。`profiling` は同じく local simulator 上で VM service-backed profiling capture と session health を見ます。`bridge` は iOS native handoff bundle と synthetic Android handoff contract を見ます。

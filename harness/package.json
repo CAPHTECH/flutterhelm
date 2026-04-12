@@ -13,6 +13,7 @@
     "contracts": "pnpm run build && pnpm run validate && pnpm run run -- --tag regression",
     "runtime": "pnpm run build && pnpm run validate && pnpm run run -- --tag runtime",
     "profiling": "pnpm run build && pnpm run validate && pnpm run run -- --tag profiling",
+    "bridge": "pnpm run build && pnpm run validate && pnpm run run -- --tag bridge",
     "qa": "pnpm run build && pnpm run validate && pnpm run run -- --tag edge && pnpm run run -- --tag adversarial"
   },
   "devDependencies": {

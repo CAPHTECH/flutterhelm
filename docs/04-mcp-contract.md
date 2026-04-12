@@ -28,13 +28,14 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 
 ### Current local alpha surface
 
-この repository の current implementation は Phase 3 相当です。
+この repository の current implementation は Phase 4 相当です。
 
 - `workspace`, `session`, `launcher`, `runtime_readonly`, `tests` workflow を local で実装
 - package search / dependency mutation approval replay / integration tests / coverage readback を含む
 - profiling workflow を local で実装し、backend は `vm_service`、policy は owned-session only
+- platform bridge workflow を local で実装し、mode は `handoff_only`、IDE automation は行わない
 - transport は `stdio-first`
-- runtime interaction / platform bridge は未実装
+- runtime interaction は未実装
 
 ## 3. Workflow Groups
 
@@ -47,7 +48,7 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 | `tests` | unit/widget/integration tests, coverage | Yes |
 | `runtime_interaction` | tap, text, scroll, screenshot | No |
 | `profiling` | CPU, memory, timeline, overlay | Yes |
-| `platform_bridge` | iOS / Android native context | No |
+| `platform_bridge` | iOS / Android native context | Yes |
 
 ## 4. Tool Catalog
 
@@ -134,6 +135,9 @@ attached / stale / release session に対する profiling tool は structured er
 | `ios_debug_context` | read_only | Xcode 側に持ち込む文脈束生成 |
 | `android_debug_context` | read_only | Android Studio 側に持ち込む文脈束生成 |
 | `native_handoff_summary` | read_only | 共通 native handoff 要約 |
+
+current implementation では platform bridge は `handoff_only` です。
+`native-handoff://...` bundle を生成しますが、Xcode / Android Studio / adb の自動操作は行いません。
 
 ## 5. Sample Tool Schemas
 
@@ -289,6 +293,44 @@ attached / stale / release session に対する profiling tool は structured er
 }
 ```
 
+## 5.5 `ios_debug_context`
+
+```json
+{
+  "name": "ios_debug_context",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "sessionId": { "type": "string" },
+      "tailLines": { "type": "integer", "minimum": 20, "maximum": 1000, "default": 200 }
+    },
+    "required": ["sessionId"]
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "sessionId": "sess_01H...",
+  "platform": "ios",
+  "status": "ready",
+  "summary": {
+    "sessionState": "running",
+    "ownership": "owned",
+    "availablePlatforms": ["ios"],
+    "evidenceCount": 6,
+    "hypothesisCount": 2
+  },
+  "resource": {
+    "uri": "native-handoff://sess_01H/ios",
+    "mimeType": "application/json",
+    "title": "iOS native handoff bundle"
+  }
+}
+```
+
 ### Response
 
 ```json
@@ -362,6 +404,15 @@ Tool failure は以下の形に正規化します。
 - `runtime`
 - `profiling`
 - `platform_bridge`
+
+### Capability notes
+
+current implementation の `capabilities.experimental.platformBridge` は以下を返します。
+
+- `mode: handoff_only`
+- `ideAutomation: false`
+- `supportedPlatforms: ["ios", "android"]`
+- `defaultEnabled: true`
 - `approval`
 - `internal`
 

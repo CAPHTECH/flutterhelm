@@ -174,6 +174,7 @@ class FlutterHelmConfig {
     'launcher',
     'runtime_readonly',
     'profiling',
+    'platform_bridge',
     'tests',
   ];
 

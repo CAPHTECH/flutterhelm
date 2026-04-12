@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutterhelm/artifacts/store.dart';
+import 'package:flutterhelm/platform_bridge/support.dart';
 import 'package:flutterhelm/server/errors.dart';
 import 'package:flutterhelm/sessions/session.dart';
 import 'package:flutterhelm/sessions/session_store.dart';
@@ -90,6 +91,9 @@ class RuntimeToolService {
       'deviceId': session.deviceId,
       'target': session.target,
       'mode': session.mode,
+      'nativeBridgeAvailablePlatforms': detectNativeBridgePlatformsSync(
+        session.workspaceRoot,
+      ),
       'vmService': <String, Object?>{
         'available': session.vmServiceAvailable,
         'maskedUri': session.vmServiceMaskedUri,

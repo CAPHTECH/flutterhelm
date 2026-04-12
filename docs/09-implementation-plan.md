@@ -226,6 +226,13 @@ Phase 3 ではさらに以下を追加します。
 
 profiling backend は current implementation では `vm_service` 固定です。DTD は diagnostic metadata として保持しますが、profiling 実行の必須条件ではありません。
 
+Phase 4 ではさらに以下を追加します。
+
+- `artifacts/sessions/<session-id>/native-handoff-ios.json`
+- `artifacts/sessions/<session-id>/native-handoff-android.json`
+
+platform bridge backend は current implementation では `handoff_only` 固定です。bundle は JSON manifest として保存し、IDE automation は行いません。
+
 ## 5. First sprint plan
 
 ### Sprint 1
@@ -274,6 +281,15 @@ profiling backend は current implementation では `vm_service` 固定です。
 - `session://<id>/health`
 - owned-session profiling guard
 
+### Sprint 6
+
+- `ios_debug_context`
+- `android_debug_context`
+- `native_handoff_summary`
+- `native-handoff://<session-id>/ios|android`
+- iOS local network permission hypothesis
+- handoff-only platform bridge capability metadata
+
 ## 6. Test strategy
 
 ## 6.1 Unit tests
@@ -313,6 +329,7 @@ profiling backend は current implementation では `vm_service` 固定です。
 - test → report → coverage
 - profile capture lifecycle
 - attached/stale session profiling rejection
+- native handoff bundle generation and postmortem reuse
 
 ## 7. Sample E2E acceptance scenario
 
