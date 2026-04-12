@@ -12,6 +12,7 @@
     "smoke": "pnpm run bootstrap && pnpm run validate && pnpm run run -- --tag smoke",
     "contracts": "pnpm run build && pnpm run validate && pnpm run run -- --tag regression",
     "runtime": "pnpm run build && pnpm run validate && pnpm run run -- --tag runtime",
+    "profiling": "pnpm run build && pnpm run validate && pnpm run run -- --tag profiling",
     "qa": "pnpm run build && pnpm run validate && pnpm run run -- --tag edge && pnpm run run -- --tag adversarial"
   },
   "devDependencies": {

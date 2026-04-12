@@ -54,6 +54,8 @@ void main() {
           'dependency_remove',
           'device_list',
           'format_files',
+          'capture_memory_snapshot',
+          'capture_timeline',
           'get_app_state_summary',
           'get_logs',
           'get_runtime_errors',
@@ -65,10 +67,13 @@ void main() {
           'run_integration_tests',
           'run_unit_tests',
           'run_widget_tests',
+          'start_cpu_profile',
           'workspace_show',
           'workspace_set_root',
           'session_open',
           'session_list',
+          'stop_cpu_profile',
+          'toggle_performance_overlay',
         ]),
       );
 
@@ -120,6 +125,7 @@ void main() {
           .toSet();
       expect(uris, contains('config://workspace/current'));
       expect(uris, contains('session://$sessionId/summary'));
+      expect(uris, contains('session://$sessionId/health'));
 
       final sessionResource = await client.request(
         'resources/read',
@@ -131,6 +137,18 @@ void main() {
       final decoded =
           jsonDecode(contents['text'] as String) as Map<String, Object?>;
       expect(decoded['sessionId'], sessionId);
+
+      final healthResource = await client.request(
+        'resources/read',
+        <String, Object?>{'uri': 'session://$sessionId/health'},
+      );
+      final healthContents =
+          (healthResource['contents'] as List<Object?>).single
+              as Map<Object?, Object?>;
+      final healthDecoded =
+          jsonDecode(healthContents['text'] as String) as Map<String, Object?>;
+      expect(healthDecoded['sessionId'], sessionId);
+      expect(healthDecoded['backend'], 'vm_service');
 
       final auditFile = File(p.join(stateDir.path, 'audit.jsonl'));
       expect(await auditFile.exists(), isTrue);
@@ -421,6 +439,207 @@ void main() {
         expect(uris, contains('test-report://$runId/summary'));
       },
       timeout: const Timeout(Duration(minutes: 12)),
+    );
+
+    test(
+      'profiles the sample app and exposes profiling resources and health guidance',
+      () async {
+        final sandbox = await Directory.systemTemp.createTemp('flutterhelm-e2e');
+        addTearDown(() => sandbox.delete(recursive: true));
+
+        final stateDir = Directory(p.join(sandbox.path, 'state'));
+        final sampleAppRoot = p.join(
+          Directory.current.path,
+          'fixtures',
+          'sample_app',
+        );
+        final client = await _TestMcpClient.start(
+          repoRoot: Directory.current.path,
+          workspaceRoot: sampleAppRoot,
+          stateDir: stateDir.path,
+        );
+        addTearDown(client.close);
+
+        await _initializeClient(client);
+        await client.request('tools/call', <String, Object?>{
+          'name': 'workspace_set_root',
+          'arguments': <String, Object?>{'workspaceRoot': sampleAppRoot},
+        });
+
+        final running = await client.request(
+          'tools/call',
+          <String, Object?>{
+            'name': 'run_app',
+            'arguments': <String, Object?>{
+              'platform': 'ios',
+              'mode': 'debug',
+              'dartDefines': <String>['FLUTTERHELM_SCENARIO=profile_demo'],
+            },
+          },
+          const Duration(minutes: 8),
+        );
+        expect(running['isError'], isFalse);
+        final runningStructured =
+            running['structuredContent'] as Map<Object?, Object?>;
+        final sessionId = runningStructured['sessionId'] as String;
+        expect(runningStructured['mode'], 'debug');
+
+        addTearDown(() async {
+          final stopResult = await client.request('tools/call', <String, Object?>{
+            'name': 'stop_app',
+            'arguments': <String, Object?>{'sessionId': sessionId},
+          });
+          if (stopResult['isError'] == true) {
+            stderr.writeln('stop_app during teardown failed: ${stopResult['structuredContent']}');
+          }
+        });
+
+        final health = await client.request(
+          'resources/read',
+          <String, Object?>{'uri': 'session://$sessionId/health'},
+        );
+        final healthBody =
+            (health['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        final healthDecoded =
+            jsonDecode(healthBody['text'] as String) as Map<String, Object?>;
+        expect(healthDecoded['ready'], isTrue);
+        expect(healthDecoded['recommendedMode'], 'profile');
+
+        final startCpu = await client.request('tools/call', <String, Object?>{
+          'name': 'start_cpu_profile',
+          'arguments': <String, Object?>{'sessionId': sessionId},
+        });
+        expect(startCpu['isError'], isFalse);
+
+        await Future<void>.delayed(const Duration(seconds: 2));
+
+        final stopCpu = await client.request('tools/call', <String, Object?>{
+          'name': 'stop_cpu_profile',
+          'arguments': <String, Object?>{'sessionId': sessionId},
+        });
+        expect(stopCpu['isError'], isFalse);
+        final stopCpuStructured =
+            stopCpu['structuredContent'] as Map<Object?, Object?>;
+        final cpuUri =
+            (stopCpuStructured['resource'] as Map<Object?, Object?>)['uri']
+                as String;
+        final cpuResource = await client.request(
+          'resources/read',
+          <String, Object?>{'uri': cpuUri},
+        );
+        final cpuBody =
+            (cpuResource['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        final cpuDecoded =
+            jsonDecode(cpuBody['text'] as String) as Map<String, Object?>;
+        expect(cpuDecoded['sessionId'], sessionId);
+        expect(
+          ((cpuDecoded['summary'] as Map<String, Object?>)['sampleCount'] as num),
+          greaterThan(0),
+        );
+
+        final timeline = await client.request('tools/call', <String, Object?>{
+          'name': 'capture_timeline',
+          'arguments': <String, Object?>{
+            'sessionId': sessionId,
+            'durationMs': 1000,
+          },
+        }, const Duration(minutes: 2));
+        expect(timeline['isError'], isFalse);
+        final timelineStructured =
+            timeline['structuredContent'] as Map<Object?, Object?>;
+        final timelineUri =
+            (timelineStructured['resource'] as Map<Object?, Object?>)['uri']
+                as String;
+        final timelineResource = await client.request(
+          'resources/read',
+          <String, Object?>{'uri': timelineUri},
+        );
+        final timelineBody =
+            (timelineResource['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        final timelineDecoded =
+            jsonDecode(timelineBody['text'] as String) as Map<String, Object?>;
+        expect(
+          ((timelineDecoded['summary'] as Map<String, Object?>)['eventCount'] as num),
+          greaterThan(0),
+        );
+
+        final memory = await client.request('tools/call', <String, Object?>{
+          'name': 'capture_memory_snapshot',
+          'arguments': <String, Object?>{
+            'sessionId': sessionId,
+            'gc': true,
+          },
+        }, const Duration(minutes: 3));
+        expect(memory['isError'], isFalse);
+        final memoryStructured =
+            memory['structuredContent'] as Map<Object?, Object?>;
+        final memoryUri =
+            (memoryStructured['resource'] as Map<Object?, Object?>)['uri']
+                as String;
+        final memoryResource = await client.request(
+          'resources/read',
+          <String, Object?>{'uri': memoryUri},
+        );
+        final memoryBody =
+            (memoryResource['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        final memoryDecoded =
+            jsonDecode(memoryBody['text'] as String) as Map<String, Object?>;
+        expect(memoryDecoded['sessionId'], sessionId);
+        expect(memoryDecoded['heapSnapshot'], isNotNull);
+
+        final overlay = await client.request('tools/call', <String, Object?>{
+          'name': 'toggle_performance_overlay',
+          'arguments': <String, Object?>{
+            'sessionId': sessionId,
+            'enabled': true,
+          },
+        });
+        expect(overlay['isError'], isFalse);
+
+        final attached = await client.request('tools/call', <String, Object?>{
+          'name': 'attach_app',
+          'arguments': <String, Object?>{
+            'sessionId': sessionId,
+            'platform': 'ios',
+            'mode': 'debug',
+          },
+        });
+        expect(attached['isError'], isFalse);
+        final attachedSessionId =
+            ((attached['structuredContent'] as Map<Object?, Object?>)['sessionId'])
+                as String;
+
+        final attachedProfile = await client.request('tools/call', <String, Object?>{
+          'name': 'capture_timeline',
+          'arguments': <String, Object?>{
+            'sessionId': attachedSessionId,
+            'durationMs': 250,
+          },
+        });
+        expect(attachedProfile['isError'], isTrue);
+        final attachedError =
+            ((attachedProfile['structuredContent'] as Map<Object?, Object?>)['error'])
+                as Map<Object?, Object?>;
+        expect(attachedError['code'], 'PROFILE_OWNERSHIP_REQUIRED');
+        final detailsResource =
+            attachedError['detailsResource'] as Map<Object?, Object?>;
+        expect(detailsResource['uri'], 'session://$attachedSessionId/health');
+
+        final resources = await client.request('resources/list');
+        final uris = (resources['resources'] as List<Object?>)
+            .cast<Map<Object?, Object?>>()
+            .map((Map<Object?, Object?> resource) => resource['uri'])
+            .toSet();
+        expect(uris, contains(cpuUri));
+        expect(uris, contains(timelineUri));
+        expect(uris, contains(memoryUri));
+        expect(uris, contains('session://$sessionId/health'));
+      },
+      timeout: const Timeout(Duration(minutes: 15)),
     );
 
     test(

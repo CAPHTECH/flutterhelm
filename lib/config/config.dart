@@ -173,6 +173,7 @@ class FlutterHelmConfig {
     'session',
     'launcher',
     'runtime_readonly',
+    'profiling',
     'tests',
   ];
 

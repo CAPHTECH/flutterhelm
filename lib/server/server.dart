@@ -10,6 +10,7 @@ import 'package:flutterhelm/policies/approvals.dart';
 import 'package:flutterhelm/policies/audit.dart';
 import 'package:flutterhelm/policies/risk.dart';
 import 'package:flutterhelm/policies/roots.dart';
+import 'package:flutterhelm/profiling/tools.dart';
 import 'package:flutterhelm/runtime/tools.dart';
 import 'package:flutterhelm/server/capabilities.dart';
 import 'package:flutterhelm/server/errors.dart';
@@ -79,6 +80,7 @@ class FlutterHelmServer {
     required this.workspaceTools,
     required this.launcherTools,
     required this.runtimeTools,
+    required this.profilingTools,
     required this.testTools,
     required String logLevel,
     required ServerState state,
@@ -99,6 +101,7 @@ class FlutterHelmServer {
   final WorkspaceToolService workspaceTools;
   final LauncherToolService launcherTools;
   final RuntimeToolService runtimeTools;
+  final ProfilingToolService profilingTools;
   final TestToolService testTools;
   final String _logLevel;
 
@@ -152,6 +155,10 @@ class FlutterHelmServer {
         flutterExecutable: config.adapters.flutterExecutable,
       ),
       runtimeTools: RuntimeToolService(
+        sessionStore: sessionStore,
+        artifactStore: artifactStore,
+      ),
+      profilingTools: ProfilingToolService(
         sessionStore: sessionStore,
         artifactStore: artifactStore,
       ),
@@ -438,7 +445,7 @@ class FlutterHelmServer {
         'version': flutterHelmVersion,
       },
       'instructions':
-          'Phase 2 server: use tools for workspace/package/run/test orchestration and resources for logs, widget trees, runtime errors, reports, and coverage.',
+          'Phase 3 server: use tools for workspace/package/run/test orchestration and vm_service-backed profiling; use resources for logs, widget trees, runtime errors, reports, coverage, session health, and profiling captures.',
     };
   }
 
@@ -482,6 +489,8 @@ class FlutterHelmServer {
             'defaults': config.defaults.toJson(),
             'configuredWorkflows': config.enabledWorkflows,
             'implementedWorkflows': _implementedWorkflows(),
+            'profilingBackend': 'vm_service',
+            'profilingOwnershipPolicy': 'owned_only',
             'resources': resources
                 .where(
                   (ResourceDescriptor resource) =>
@@ -926,6 +935,77 @@ class FlutterHelmServer {
             sessionId: currentSessionId,
             resourceLinks: _resourceLinksFromPayload(<Object?>[appState['resource']]),
           );
+        case 'start_cpu_profile':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final started = await profilingTools.startCpuProfile(sessionId: currentSessionId);
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'CPU profiling started for session $currentSessionId.',
+            structuredContent: started,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+          );
+        case 'stop_cpu_profile':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final stopped = await profilingTools.stopCpuProfile(sessionId: currentSessionId);
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'CPU profiling capture completed for session $currentSessionId.',
+            structuredContent: stopped,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[stopped['resource']]),
+          );
+        case 'capture_timeline':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final timeline = await profilingTools.captureTimeline(
+            sessionId: currentSessionId,
+            durationMs: arguments['durationMs'] as int? ?? 3000,
+            streams: _asStringList(arguments['streams']).isEmpty
+                ? const <String>['all']
+                : _asStringList(arguments['streams']),
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Timeline capture completed for session $currentSessionId.',
+            structuredContent: timeline,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[timeline['resource']]),
+          );
+        case 'capture_memory_snapshot':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final memory = await profilingTools.captureMemorySnapshot(
+            sessionId: currentSessionId,
+            gc: arguments['gc'] as bool? ?? true,
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Memory snapshot completed for session $currentSessionId.',
+            structuredContent: memory,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[memory['resource']]),
+          );
+        case 'toggle_performance_overlay':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final overlay = await profilingTools.togglePerformanceOverlay(
+            sessionId: currentSessionId,
+            enabled: arguments['enabled'] as bool? ?? false,
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Performance overlay updated for session $currentSessionId.',
+            structuredContent: overlay,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[overlay['resource']]),
+          );
         case 'run_unit_tests':
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
             arguments['workspaceRoot'] as String?,
@@ -1010,7 +1090,7 @@ class FlutterHelmServer {
           throw FlutterHelmToolError(
             code: 'TOOL_NOT_IMPLEMENTED',
             category: 'internal',
-            message: 'Tool not implemented in Phase 2: ${definition.name}',
+            message: 'Tool not implemented in Phase 3: ${definition.name}',
             retryable: false,
           );
       }

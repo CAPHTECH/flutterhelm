@@ -19,12 +19,25 @@ class ArtifactStore {
 
   String sessionLogUri(String sessionId, String stream) => 'log://$sessionId/$stream';
 
+  String sessionSummaryUri(String sessionId) => 'session://$sessionId/summary';
+
+  String sessionHealthUri(String sessionId) => 'session://$sessionId/health';
+
   String sessionRuntimeErrorsUri(String sessionId) => 'runtime-errors://$sessionId/current';
 
   String sessionWidgetTreeUri(String sessionId, int depth) =>
       'widget-tree://$sessionId/current?depth=$depth';
 
   String sessionAppStateUri(String sessionId) => 'app-state://$sessionId/summary';
+
+  String sessionCpuProfileUri(String sessionId, String captureId) =>
+      'cpu://$sessionId/$captureId';
+
+  String sessionTimelineUri(String sessionId, String captureId) =>
+      'timeline://$sessionId/$captureId';
+
+  String sessionMemoryUri(String sessionId, String snapshotId) =>
+      'memory://$sessionId/$snapshotId';
 
   String testSummaryUri(String runId) => 'test-report://$runId/summary';
 
@@ -86,6 +99,56 @@ class ArtifactStore {
       File(p.join(sessionArtifactsDir(sessionId), 'app-state-summary.json')),
       payload,
     );
+  }
+
+  Future<void> writeSessionCpuProfile({
+    required String sessionId,
+    required String captureId,
+    required Map<String, Object?> payload,
+  }) {
+    return _writeJson(
+      File(p.join(sessionArtifactsDir(sessionId), 'cpu-profile-$captureId.json')),
+      payload,
+    );
+  }
+
+  Future<void> writeSessionTimeline({
+    required String sessionId,
+    required String captureId,
+    required Map<String, Object?> payload,
+  }) {
+    return _writeJson(
+      File(p.join(sessionArtifactsDir(sessionId), 'timeline-$captureId.json')),
+      payload,
+    );
+  }
+
+  Future<void> writeSessionMemorySnapshot({
+    required String sessionId,
+    required String snapshotId,
+    required Map<String, Object?> payload,
+  }) {
+    return _writeJson(
+      File(p.join(sessionArtifactsDir(sessionId), 'memory-$snapshotId.json')),
+      payload,
+    );
+  }
+
+  Future<void> writeSessionHeapSnapshotSidecar({
+    required String sessionId,
+    required String snapshotId,
+    required List<List<int>> chunks,
+  }) async {
+    final file = File(p.join(sessionArtifactsDir(sessionId), 'memory-$snapshotId.heap'));
+    await file.parent.create(recursive: true);
+    final sink = file.openWrite();
+    try {
+      for (final chunk in chunks) {
+        sink.add(chunk);
+      }
+    } finally {
+      await sink.close();
+    }
   }
 
   Future<void> writeTestRunSummary({
@@ -208,6 +271,7 @@ class ArtifactStore {
         title: 'Session stdout $sessionId',
         description: 'Collected stdout lines for the session.',
         mimeType: 'text/plain',
+        sessionId: sessionId,
       ));
     }
     final stderrFile = File(p.join(dir.path, 'stderr.log'));
@@ -219,6 +283,7 @@ class ArtifactStore {
         title: 'Session stderr $sessionId',
         description: 'Collected stderr lines for the session.',
         mimeType: 'text/plain',
+        sessionId: sessionId,
       ));
     }
     final runtimeErrors = File(p.join(dir.path, 'runtime-errors-current.json'));
@@ -230,6 +295,7 @@ class ArtifactStore {
         title: 'Runtime errors $sessionId',
         description: 'Current structured runtime errors.',
         mimeType: 'application/json',
+        sessionId: sessionId,
       ));
     }
     final appState = File(p.join(dir.path, 'app-state-summary.json'));
@@ -241,25 +307,71 @@ class ArtifactStore {
         title: 'App state $sessionId',
         description: 'High-level session state summary.',
         mimeType: 'application/json',
+        sessionId: sessionId,
       ));
     }
     await for (final entity in dir.list()) {
       if (entity is! File) {
         continue;
       }
-      final match = RegExp(r'widget-tree-depth-(\d+)\.json$').firstMatch(entity.path);
-      if (match == null) {
+      final widgetTreeMatch = RegExp(r'widget-tree-depth-(\d+)\.json$').firstMatch(entity.path);
+      if (widgetTreeMatch != null) {
+        final depth = int.parse(widgetTreeMatch.group(1)!);
+        resources.add(await _descriptorForFile(
+          file: entity,
+          uri: sessionWidgetTreeUri(sessionId, depth),
+          name: 'session.widgetTree.$sessionId.$depth',
+          title: 'Widget tree $sessionId depth=$depth',
+          description: 'Captured widget tree snapshot.',
+          mimeType: 'application/json',
+          sessionId: sessionId,
+        ));
         continue;
       }
-      final depth = int.parse(match.group(1)!);
-      resources.add(await _descriptorForFile(
-        file: entity,
-        uri: sessionWidgetTreeUri(sessionId, depth),
-        name: 'session.widgetTree.$sessionId.$depth',
-        title: 'Widget tree $sessionId depth=$depth',
-        description: 'Captured widget tree snapshot.',
-        mimeType: 'application/json',
-      ));
+
+      final cpuMatch = RegExp(r'cpu-profile-(.+)\.json$').firstMatch(entity.path);
+      if (cpuMatch != null) {
+        final captureId = cpuMatch.group(1)!;
+        resources.add(await _descriptorForFile(
+          file: entity,
+          uri: sessionCpuProfileUri(sessionId, captureId),
+          name: 'session.cpu.$sessionId.$captureId',
+          title: 'CPU profile $sessionId $captureId',
+          description: 'Captured CPU profile summary and raw samples.',
+          mimeType: 'application/json',
+          sessionId: sessionId,
+        ));
+        continue;
+      }
+
+      final timelineMatch = RegExp(r'timeline-(.+)\.json$').firstMatch(entity.path);
+      if (timelineMatch != null) {
+        final captureId = timelineMatch.group(1)!;
+        resources.add(await _descriptorForFile(
+          file: entity,
+          uri: sessionTimelineUri(sessionId, captureId),
+          name: 'session.timeline.$sessionId.$captureId',
+          title: 'Timeline capture $sessionId $captureId',
+          description: 'Captured VM timeline and summary.',
+          mimeType: 'application/json',
+          sessionId: sessionId,
+        ));
+        continue;
+      }
+
+      final memoryMatch = RegExp(r'memory-(.+)\.json$').firstMatch(entity.path);
+      if (memoryMatch != null) {
+        final snapshotId = memoryMatch.group(1)!;
+        resources.add(await _descriptorForFile(
+          file: entity,
+          uri: sessionMemoryUri(sessionId, snapshotId),
+          name: 'session.memory.$sessionId.$snapshotId',
+          title: 'Memory snapshot $sessionId $snapshotId',
+          description: 'Captured memory summary and heap snapshot metadata.',
+          mimeType: 'application/json',
+          sessionId: sessionId,
+        ));
+      }
     }
     resources.sort((left, right) => left.uri.compareTo(right.uri));
     return resources;
@@ -420,6 +532,7 @@ class ArtifactStore {
     required String title,
     required String description,
     required String mimeType,
+    String? sessionId,
   }) async {
     final stat = await file.stat();
     return ResourceDescriptor(
@@ -428,8 +541,10 @@ class ArtifactStore {
       title: title,
       description: description,
       mimeType: mimeType,
+      createdAt: stat.changed.toUtc(),
       lastModified: stat.modified.toUtc(),
       size: stat.size,
+      sessionId: sessionId,
     );
   }
 
@@ -473,6 +588,30 @@ class ArtifactStore {
       final depth = Uri.parse(uri).queryParameters['depth'] ?? '3';
       return _ResolvedStoredFile(
         path: p.join(sessionArtifactsDir(widgetTreeMatch.group(1)!), 'widget-tree-depth-$depth.json'),
+        mimeType: 'application/json',
+      );
+    }
+
+    final cpuMatch = RegExp(r'^cpu://([^/]+)/([^/]+)$').firstMatch(uri);
+    if (cpuMatch != null) {
+      return _ResolvedStoredFile(
+        path: p.join(sessionArtifactsDir(cpuMatch.group(1)!), 'cpu-profile-${cpuMatch.group(2)}.json'),
+        mimeType: 'application/json',
+      );
+    }
+
+    final timelineMatch = RegExp(r'^timeline://([^/]+)/([^/]+)$').firstMatch(uri);
+    if (timelineMatch != null) {
+      return _ResolvedStoredFile(
+        path: p.join(sessionArtifactsDir(timelineMatch.group(1)!), 'timeline-${timelineMatch.group(2)}.json'),
+        mimeType: 'application/json',
+      );
+    }
+
+    final memoryMatch = RegExp(r'^memory://([^/]+)/([^/]+)$').firstMatch(uri);
+    if (memoryMatch != null) {
+      return _ResolvedStoredFile(
+        path: p.join(sessionArtifactsDir(memoryMatch.group(1)!), 'memory-${memoryMatch.group(2)}.json'),
         mimeType: 'application/json',
       );
     }

@@ -36,6 +36,7 @@ class SessionRecord {
     required this.vmServiceMaskedUri,
     required this.dtdAvailable,
     required this.dtdMaskedUri,
+    required this.profileActive,
     required this.createdAt,
     required this.lastSeenAt,
     required this.lastExitAt,
@@ -58,6 +59,7 @@ class SessionRecord {
   final String? vmServiceMaskedUri;
   final bool dtdAvailable;
   final String? dtdMaskedUri;
+  final bool profileActive;
   final DateTime createdAt;
   final DateTime lastSeenAt;
   final DateTime? lastExitAt;
@@ -88,6 +90,7 @@ class SessionRecord {
       vmServiceMaskedUri: null,
       dtdAvailable: false,
       dtdMaskedUri: null,
+      profileActive: false,
       createdAt: now,
       lastSeenAt: now,
       lastExitAt: null,
@@ -114,6 +117,7 @@ class SessionRecord {
     bool? dtdAvailable,
     String? dtdMaskedUri,
     bool clearDtdMaskedUri = false,
+    bool? profileActive,
     DateTime? lastSeenAt,
     DateTime? lastExitAt,
     int? lastExitCode,
@@ -139,6 +143,7 @@ class SessionRecord {
       dtdMaskedUri: clearDtdMaskedUri
           ? null
           : (dtdMaskedUri ?? this.dtdMaskedUri),
+      profileActive: profileActive ?? this.profileActive,
       createdAt: createdAt,
       lastSeenAt: lastSeenAt ?? this.lastSeenAt,
       lastExitAt: lastExitAt ?? this.lastExitAt,
@@ -170,6 +175,7 @@ class SessionRecord {
           (json['dtd'] as Map<Object?, Object?>?)?['available'] == true,
       dtdMaskedUri:
           (json['dtd'] as Map<Object?, Object?>?)?['maskedUri'] as String?,
+      profileActive: json['profileActive'] as bool? ?? false,
       createdAt: DateTime.parse(json['createdAt'] as String).toUtc(),
       lastSeenAt: DateTime.parse(json['lastSeenAt'] as String).toUtc(),
       lastExitAt: json['lastExitAt'] is String
@@ -201,10 +207,11 @@ class SessionRecord {
         'available': dtdAvailable,
         if (dtdMaskedUri != null) 'maskedUri': dtdMaskedUri,
       },
+      'profileActive': profileActive,
       'adapters': const <String, Object?>{
         'delegate': 'dart_flutter_mcp',
         'launcher': 'flutter_cli',
-        'profiling': 'dtd',
+        'profiling': 'vm_service',
         'runtimeDriver': null,
       },
       'createdAt': createdAt.toUtc().toIso8601String(),
@@ -226,6 +233,7 @@ class SessionRecord {
       'mode': mode,
       'state': state.wireName,
       'stale': stale,
+      'profileActive': profileActive,
       'pid': pid,
       'createdAt': createdAt.toUtc().toIso8601String(),
       'lastSeenAt': lastSeenAt.toUtc().toIso8601String(),

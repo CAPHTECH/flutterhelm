@@ -20,7 +20,7 @@ mise exec -- pnpm -C harness bootstrap
 ```
 
 `bootstrap` は `harness/.venv-docs` を作成し、MkDocs を local に導入します。
-Phase 2 implementation checks は repo root の `mise.toml` と Dart/Flutter package を使うため、先に toolchain を有効化します。
+Phase 3 implementation checks は repo root の `mise.toml` と Dart/Flutter package を使うため、先に toolchain を有効化します。
 
 ## よく使うコマンド
 
@@ -29,9 +29,11 @@ mise exec -- pnpm -C harness validate
 mise exec -- pnpm -C harness smoke
 mise exec -- pnpm -C harness contracts
 mise exec -- pnpm -C harness runtime
+mise exec -- pnpm -C harness profiling
 mise exec -- pnpm -C harness qa
 mise exec -- pnpm -C harness run -- --tag regression
 mise exec -- pnpm -C harness run -- --tag runtime
+mise exec -- pnpm -C harness run -- --tag profiling
 mise exec -- pnpm -C harness report
 ```
 
@@ -48,7 +50,8 @@ mise exec -- pnpm -C harness report
 - `regression`: workflow/tool/risk/resource/session/approval の core contract
 - `regression`: 上記に加えて tool exposure, sample app flow, package approval replay, coverage readback, root/session flow, audit log
 - `runtime`: iOS simulator で `run_app -> runtime errors -> widget tree -> attach/stop guard -> run_integration_tests` を確認
+- `profiling`: iOS simulator で `run_app -> session health -> cpu/timeline/memory capture -> overlay -> attached-session guard` を確認
 - `edge`: 実務でよく聞かれる設計質問
 - `adversarial`: 誤った前提に対する防御的回答
 
-`runtime` は macOS + Xcode simulator 前提のローカル専用チェックです。
+`runtime` と `profiling` は macOS + Xcode simulator 前提のローカル専用チェックです。

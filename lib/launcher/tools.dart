@@ -451,7 +451,37 @@ class LauncherToolService {
         retryable: true,
       );
     }
+    if (platform == 'ios') {
+      matching.sort((Map<String, Object?> left, Map<String, Object?> right) {
+        final scoreCompare = _iosLaunchPriority(right).compareTo(
+          _iosLaunchPriority(left),
+        );
+        if (scoreCompare != 0) {
+          return scoreCompare;
+        }
+        return (left['name'] as String? ?? '').compareTo(
+          right['name'] as String? ?? '',
+        );
+      });
+    }
     return matching.first['deviceId'] as String;
+  }
+
+  int _iosLaunchPriority(Map<String, Object?> device) {
+    final name = (device['name'] as String? ?? '').toLowerCase();
+    final bootState = (device['bootState'] as String? ?? '').toLowerCase();
+    final isIphone = name.contains('iphone');
+    final isBooted = bootState == 'booted';
+    if (isIphone && isBooted) {
+      return 4;
+    }
+    if (isIphone) {
+      return 3;
+    }
+    if (isBooted) {
+      return 2;
+    }
+    return 1;
   }
 
   Future<void> _ensureIosSimulatorBooted(String deviceId) async {
@@ -541,6 +571,7 @@ class LauncherToolService {
       'target': session.target,
       'mode': session.mode,
       'pid': session.pid,
+      'profileActive': session.profileActive,
       'vmService': <String, Object?>{
         'available': session.vmServiceAvailable,
         'maskedUri': session.vmServiceMaskedUri,

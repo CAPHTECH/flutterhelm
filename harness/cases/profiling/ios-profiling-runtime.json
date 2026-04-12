@@ -1,0 +1,15 @@
+{
+  "id": "ios-profiling-runtime",
+  "mode": "software",
+  "tags": ["profiling"],
+  "input": {
+    "checks": ["phase3-profiling-flow"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": [
+      "check:phase3-profiling-flow:ok",
+      "summary:ios-profiling-runtime"
+    ]
+  }
+}

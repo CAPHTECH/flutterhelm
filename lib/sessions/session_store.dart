@@ -14,6 +14,8 @@ class LiveSessionHandle {
     required this.machinePath,
     this.vmServiceUri,
     this.dtdUri,
+    this.cpuProfileStartMicros,
+    this.cpuProfileStartedAt,
   });
 
   final Process? process;
@@ -22,6 +24,8 @@ class LiveSessionHandle {
   final String machinePath;
   String? vmServiceUri;
   String? dtdUri;
+  int? cpuProfileStartMicros;
+  DateTime? cpuProfileStartedAt;
   StreamSubscription<String>? stdoutSubscription;
   StreamSubscription<String>? stderrSubscription;
   StreamSubscription<String>? machineSubscription;
@@ -90,6 +94,7 @@ class SessionStore {
             ? SessionState.attached
             : SessionState.stopped,
         stale: true,
+        profileActive: false,
         lastSeenAt: DateTime.now().toUtc(),
       );
     }
@@ -298,9 +303,25 @@ class SessionStore {
     final updated = current.copyWith(
       state: nextState,
       stale: stale ?? current.stale,
+      profileActive: nextState == SessionState.stopped ||
+              nextState == SessionState.failed ||
+              nextState == SessionState.disposed
+          ? false
+          : current.profileActive,
       lastSeenAt: DateTime.now().toUtc(),
       lastExitAt: lastExitAt,
       lastExitCode: lastExitCode,
+    );
+    _sessions[sessionId] = updated;
+    unawaited(_persist());
+    return updated;
+  }
+
+  SessionRecord setProfileActive(String sessionId, bool profileActive) {
+    final current = requireById(sessionId, touch: false);
+    final updated = current.copyWith(
+      profileActive: profileActive,
+      lastSeenAt: DateTime.now().toUtc(),
     );
     _sessions[sessionId] = updated;
     unawaited(_persist());

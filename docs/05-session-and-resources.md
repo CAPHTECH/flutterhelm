@@ -41,13 +41,13 @@ Session は、**1 つの workspace / target / platform / device / mode / runtime
     "maskedUri": "ws://127.0.0.1:.../ws"
   },
   "dtd": {
-    "available": true,
-    "maskedUri": "ws://127.0.0.1:.../dtd"
+    "available": false
   },
+  "profileActive": false,
   "adapters": {
     "delegate": "dart_flutter_mcp",
     "launcher": "flutter_cli",
-    "profiling": "dtd",
+    "profiling": "vm_service",
     "runtimeDriver": null
   },
   "createdAt": "2026-04-11T12:34:56Z",
@@ -127,6 +127,7 @@ server 再起動後、live process handle を持たない session は `stale=tru
 - session summary と app state は resource として再読可能
 - owned でも stale session に対する mutation は禁止
 - live VM service がある session のみ `get_widget_tree` を許可
+- profiling は owned + running + live VM service session のみ許可
 
 ## 6. Resources の位置づけ
 
@@ -175,6 +176,8 @@ FlutterHelm はこれを徹底します。
 - `timeline://<session-id>/<capture-id>`
 - `memory://<session-id>/<snapshot-id>`
 - `cpu://<session-id>/<capture-id>`
+
+public profiling resource は summary JSON を返し、raw heap snapshot は session artifact 配下の sidecar として保持します。
 
 ## 7.5 assets / visuals
 
@@ -274,20 +277,31 @@ Tool は極力この形で返します。
 
 ## 13. Session health
 
-`session://<id>/health` では以下を返す想定です。
+`session://<id>/health` では以下を返します。
 
 ```json
 {
+  "sessionId": "sess_01H...",
+  "ready": true,
+  "issues": [],
+  "guidance": [
+    "Profile mode is recommended for performance measurements.",
+    "DTD is not available; FlutterHelm will use vm_service-backed profiling."
+  ],
+  "ownership": "owned",
+  "stale": false,
   "state": "running",
-  "processAlive": true,
-  "vmServiceConnected": true,
-  "dtdConnected": false,
-  "runtimeDriverConnected": false,
-  "warnings": [
-    "DTD disconnected; profiling tools are currently unavailable."
-  ]
+  "currentMode": "debug",
+  "recommendedMode": "profile",
+  "vmServiceAvailable": true,
+  "dtdAvailable": false,
+  "backend": "vm_service",
+  "profileActive": false
 }
 ```
+
+この resource は profiling failure の `detailsResource` としても使われます。  
+attached / stale / release session では `issues` と `guidance` が増え、なぜ profiling が拒否されたかを short error とは別に読めます。
 
 ## 14. このモデルの効用
 

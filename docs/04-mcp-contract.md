@@ -28,12 +28,13 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 
 ### Current local alpha surface
 
-この repository の current implementation は Phase 2 相当です。
+この repository の current implementation は Phase 3 相当です。
 
 - `workspace`, `session`, `launcher`, `runtime_readonly`, `tests` workflow を local で実装
 - package search / dependency mutation approval replay / integration tests / coverage readback を含む
+- profiling workflow を local で実装し、backend は `vm_service`、policy は owned-session only
 - transport は `stdio-first`
-- runtime interaction / profiling / platform bridge は未実装
+- runtime interaction / platform bridge は未実装
 
 ## 3. Workflow Groups
 
@@ -45,7 +46,7 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 | `runtime_readonly` | errors, widget tree, logs, summaries | Yes |
 | `tests` | unit/widget/integration tests, coverage | Yes |
 | `runtime_interaction` | tap, text, scroll, screenshot | No |
-| `profiling` | CPU, memory, timeline, overlay | No |
+| `profiling` | CPU, memory, timeline, overlay | Yes |
 | `platform_bridge` | iOS / Android native context | No |
 
 ## 4. Tool Catalog
@@ -101,7 +102,7 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 | `run_widget_tests` | test_execution | widget test 実行 |
 | `run_integration_tests` | test_execution | integration test 実行 |
 | `get_test_results` | read_only | 既存 test run の結果参照 |
-| `collect_coverage` | read_only | coverage artifact 生成 / 読み出し |
+| `collect_coverage` | read_only | 既存 coverage artifact 読み出し |
 
 ## 4.6 profiling
 
@@ -112,6 +113,9 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 | `capture_memory_snapshot` | runtime_control | memory snapshot |
 | `capture_timeline` | runtime_control | timeline capture |
 | `toggle_performance_overlay` | runtime_control | performance overlay 切替 |
+
+current implementation では profiling backend は `vm_service` です。  
+attached / stale / release session に対する profiling tool は structured error と `session://<id>/health` を返します。
 
 ## 4.7 runtime_interaction
 
@@ -180,8 +184,7 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
     "maskedUri": "ws://127.0.0.1:.../ws"
   },
   "dtd": {
-    "available": true,
-    "maskedUri": "ws://127.0.0.1:.../dtd"
+    "available": false
   },
   "resources": [
     {
@@ -322,6 +325,7 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 | `log://` | stdout / stderr / structured logs |
 | `runtime-errors://` | current runtime errors |
 | `widget-tree://` | widget hierarchy snapshot |
+| `cpu://` | CPU profile captures |
 | `timeline://` | performance timeline |
 | `memory://` | memory snapshots / diffs |
 | `test-report://` | test result summary / details |

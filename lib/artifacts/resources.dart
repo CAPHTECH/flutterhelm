@@ -13,8 +13,10 @@ class ResourceDescriptor {
     required this.title,
     required this.description,
     required this.mimeType,
+    required this.createdAt,
     required this.lastModified,
     this.size,
+    this.sessionId,
   });
 
   final String uri;
@@ -22,8 +24,10 @@ class ResourceDescriptor {
   final String title;
   final String description;
   final String mimeType;
+  final DateTime createdAt;
   final DateTime lastModified;
   final int? size;
+  final String? sessionId;
 
   Map<String, Object?> toJson() {
     return <String, Object?>{
@@ -33,6 +37,9 @@ class ResourceDescriptor {
       'description': description,
       'mimeType': mimeType,
       if (size != null) 'size': size,
+      if (size != null) 'sizeBytes': size,
+      'createdAt': createdAt.toUtc().toIso8601String(),
+      if (sessionId != null) 'sessionId': sessionId,
       'annotations': <String, Object?>{
         'audience': const <String>['user', 'assistant'],
         'priority': 0.8,
@@ -92,6 +99,7 @@ class ResourceCatalog {
       _workspaceCurrentDescriptor(state),
       _workspaceDefaultsDescriptor(config),
       ...sessions.map(_sessionSummaryDescriptor),
+      ...sessions.map(_sessionHealthDescriptor),
     ];
 
     for (final session in sessions) {
@@ -129,13 +137,13 @@ class ResourceCatalog {
       );
     }
 
-    final sessionMatch = RegExp(r'^session://([^/]+)/summary$').firstMatch(uri);
-    if (sessionMatch != null) {
+    final sessionSummaryMatch = RegExp(r'^session://([^/]+)/summary$').firstMatch(uri);
+    if (sessionSummaryMatch != null) {
       if (session == null) {
         throw FlutterHelmToolError(
           code: 'SESSION_NOT_FOUND',
           category: 'runtime',
-          message: 'Unknown session for resource: ${sessionMatch.group(1)}',
+          message: 'Unknown session for resource: ${sessionSummaryMatch.group(1)}',
           retryable: false,
         );
       }
@@ -143,6 +151,23 @@ class ResourceCatalog {
         uri: uri,
         mimeType: 'application/json',
         text: jsonEncode(session.toJson()),
+      );
+    }
+
+    final sessionHealthMatch = RegExp(r'^session://([^/]+)/health$').firstMatch(uri);
+    if (sessionHealthMatch != null) {
+      if (session == null) {
+        throw FlutterHelmToolError(
+          code: 'SESSION_NOT_FOUND',
+          category: 'runtime',
+          message: 'Unknown session for resource: ${sessionHealthMatch.group(1)}',
+          retryable: false,
+        );
+      }
+      return ResourceReadResult(
+        uri: uri,
+        mimeType: 'application/json',
+        text: jsonEncode(_sessionHealth(session)),
       );
     }
 
@@ -166,6 +191,7 @@ class ResourceCatalog {
       title: 'Current workspace configuration',
       description: 'Active root and client roots state.',
       mimeType: 'application/json',
+      createdAt: state.updatedAt ?? DateTime.now().toUtc(),
       lastModified: state.updatedAt ?? DateTime.now().toUtc(),
     );
   }
@@ -177,6 +203,7 @@ class ResourceCatalog {
       title: 'Workspace defaults',
       description: 'Resolved config defaults and workflow enablement.',
       mimeType: 'application/json',
+      createdAt: DateTime.now().toUtc(),
       lastModified: DateTime.now().toUtc(),
       size: jsonEncode(config.toJson()).length,
     );
@@ -189,8 +216,71 @@ class ResourceCatalog {
       title: 'Session summary ${session.sessionId}',
       description: 'Persisted session record.',
       mimeType: 'application/json',
+      createdAt: session.createdAt,
       lastModified: session.lastSeenAt,
       size: jsonEncode(session.toJson()).length,
+      sessionId: session.sessionId,
     );
+  }
+
+  ResourceDescriptor _sessionHealthDescriptor(SessionRecord session) {
+    return ResourceDescriptor(
+      uri: 'session://${session.sessionId}/health',
+      name: 'session.health.${session.sessionId}',
+      title: 'Session health ${session.sessionId}',
+      description: 'Profiling and runtime capability guidance for this session.',
+      mimeType: 'application/json',
+      createdAt: session.createdAt,
+      lastModified: session.lastSeenAt,
+      size: jsonEncode(_sessionHealth(session)).length,
+      sessionId: session.sessionId,
+    );
+  }
+
+  Map<String, Object?> _sessionHealth(SessionRecord session) {
+    final issues = <String>[];
+    final guidance = <String>[];
+
+    if (session.stale) {
+      issues.add('session is stale');
+      guidance.add('Re-run or re-attach the app before using runtime or profiling tools.');
+    }
+    if (session.ownership != SessionOwnership.owned) {
+      issues.add('profiling requires an owned session');
+      guidance.add('Use run_app to create an owned session instead of attach_app.');
+    }
+    if (session.state != SessionState.running) {
+      issues.add('session is not running');
+      guidance.add('Profiling tools require a live running session.');
+    }
+    if (!session.vmServiceAvailable) {
+      issues.add('vm service is unavailable');
+      guidance.add('Profiling requires a live VM service connection.');
+    }
+    if (session.mode == 'release') {
+      issues.add('release mode is unsupported for profiling');
+      guidance.add('Use run_app with mode=profile for more reliable performance diagnostics.');
+    } else if (session.mode != 'profile') {
+      guidance.add('Profile mode is recommended for performance measurements.');
+    }
+    if (!session.dtdAvailable) {
+      guidance.add('DTD is not available; FlutterHelm will use vm_service-backed profiling.');
+    }
+
+    return <String, Object?>{
+      'sessionId': session.sessionId,
+      'ready': issues.isEmpty,
+      'issues': issues,
+      'guidance': guidance,
+      'ownership': session.ownership.wireName,
+      'stale': session.stale,
+      'state': session.state.wireName,
+      'currentMode': session.mode,
+      'recommendedMode': 'profile',
+      'vmServiceAvailable': session.vmServiceAvailable,
+      'dtdAvailable': session.dtdAvailable,
+      'backend': 'vm_service',
+      'profileActive': session.profileActive,
+    };
   }
 }

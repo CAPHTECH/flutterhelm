@@ -597,7 +597,15 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Start CPU profiling.',
       workflow: 'profiling',
       risk: RiskClass.runtimeControl,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'stop_cpu_profile',
@@ -605,7 +613,15 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Stop CPU profiling.',
       workflow: 'profiling',
       risk: RiskClass.runtimeControl,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'capture_memory_snapshot',
@@ -613,7 +629,16 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Capture a memory snapshot.',
       workflow: 'profiling',
       risk: RiskClass.runtimeControl,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'gc': <String, Object?>{'type': 'boolean'},
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'capture_timeline',
@@ -621,7 +646,20 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Capture a performance timeline.',
       workflow: 'profiling',
       risk: RiskClass.runtimeControl,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'durationMs': <String, Object?>{'type': 'integer', 'minimum': 1},
+          'streams': <String, Object?>{
+            'type': 'array',
+            'items': <String, Object?>{'type': 'string'},
+          },
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'toggle_performance_overlay',
@@ -629,7 +667,16 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Toggle the performance overlay.',
       workflow: 'profiling',
       risk: RiskClass.runtimeControl,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'enabled': <String, Object?>{'type': 'boolean'},
+        },
+        'required': <String>['sessionId', 'enabled'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'ios_debug_context',

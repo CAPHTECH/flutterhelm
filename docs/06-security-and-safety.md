@@ -178,7 +178,8 @@ iOS 14+ では local network permission を許可しないと hot reload や Dev
 | 状態破壊 | hot restart 乱発 | risk class + confirmation |
 | 秘密漏えい | logs に token 混入 | redaction |
 | attached process 誤停止 | 他ツール起動 app の kill | ownership rule |
-| profiling 誤期待 | debug mode で誤った性能判断 | profile mode guidance |
+| profiling 誤期待 | debug mode で誤った性能判断 | profile mode guidance + session health |
+| attached profiling | attach 済み app に対する重い capture | owned-session only policy |
 
 ## 14. 結論
 

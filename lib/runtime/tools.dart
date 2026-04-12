@@ -5,8 +5,7 @@ import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/server/errors.dart';
 import 'package:flutterhelm/sessions/session.dart';
 import 'package:flutterhelm/sessions/session_store.dart';
-import 'package:vm_service/vm_service.dart' as vm;
-import 'package:vm_service/vm_service_io.dart';
+import 'package:flutterhelm/runtime/vm_service_support.dart';
 
 class RuntimeToolService {
   RuntimeToolService({
@@ -99,6 +98,7 @@ class RuntimeToolService {
         'available': session.dtdAvailable,
         'maskedUri': session.dtdMaskedUri,
       },
+      'profileActive': session.profileActive,
       'updatedAt': DateTime.now().toUtc().toIso8601String(),
     };
     await artifactStore.writeSessionAppState(sessionId: sessionId, payload: payload);
@@ -128,12 +128,14 @@ class RuntimeToolService {
       );
     }
 
-    final service = await vmServiceConnectUri(rawVmServiceUri);
+    final vmSession = await VmServiceSession.connect(
+      rawVmServiceUri,
+      requiredExtension: 'ext.flutter.inspector.getRootWidgetTree',
+    );
     try {
-      final isolate = await _waitForExtension(service, 'ext.flutter.inspector.getRootWidgetTree');
-      final response = await service.callServiceExtension(
+      final response = await vmSession.service.callServiceExtension(
         'ext.flutter.inspector.getRootWidgetTree',
-        isolateId: isolate.id,
+        isolateId: vmSession.isolate.id,
         args: <String, String>{
           'groupName': 'flutterhelm-$sessionId',
           'isSummaryTree': 'true',
@@ -170,7 +172,7 @@ class RuntimeToolService {
         },
       };
     } finally {
-      await service.dispose();
+      await vmSession.dispose();
     }
   }
 
@@ -199,27 +201,6 @@ class RuntimeToolService {
       }
     }
     return errors;
-  }
-
-  Future<vm.Isolate> _waitForExtension(vm.VmService service, String extension) async {
-    final completer = Completer<void>();
-    try {
-      await service.streamListen(vm.EventStreams.kExtension);
-    } on vm.RPCError {
-      // Already listening.
-    }
-    service.onExtensionEvent.listen((vm.Event event) {
-      if (event.json?['extensionKind'] == 'Flutter.FrameworkInitialization' && !completer.isCompleted) {
-        completer.complete();
-      }
-    });
-    final isolateRef = (await service.getVM()).isolates!.first;
-    final isolate = await service.getIsolate(isolateRef.id!);
-    if (isolate.extensionRPCs?.contains(extension) == true) {
-      return isolate;
-    }
-    await completer.future.timeout(const Duration(seconds: 20));
-    return isolate;
   }
 
   Map<String, Object?> _normalizeJson(Object? value) {

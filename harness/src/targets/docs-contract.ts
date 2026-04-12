@@ -37,7 +37,8 @@ type CheckName =
   | "phase0-audit-log"
   | "phase1-tool-exposure"
   | "phase1-sample-app-flow"
-  | "phase1-runtime-overflow-flow";
+  | "phase1-runtime-overflow-flow"
+  | "phase3-profiling-flow";
 
 interface ContractCaseInput {
   checks?: CheckName[];
@@ -539,13 +540,17 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
       ["runtime_readonly", true],
       ["tests", true],
       ["runtime_interaction", false],
-      ["profiling", false],
+      ["profiling", true],
       ["platform_bridge", false],
     ] as const) {
       const status = requireObject(workflowStatus[workflow], `workflowStatus.${workflow}`);
       if (status.implemented !== implemented) {
         throw new Error(`workflow ${workflow} implemented=${implemented} expected, got ${String(status.implemented)}`);
       }
+    }
+    const profiling = requireObject(experimental.profiling, "capabilities.experimental.profiling");
+    if (profiling.backend !== "vm_service" || profiling.ownershipPolicy !== "owned_only") {
+      throw new Error(`Unexpected profiling capability metadata: ${JSON.stringify(profiling)}`);
     }
 
     const toolsList = await client.request("tools/list");
@@ -556,6 +561,8 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
     const expectedTools = [
       "analyze_project",
       "attach_app",
+      "capture_memory_snapshot",
+      "capture_timeline",
       "collect_coverage",
       "dependency_add",
       "dependency_remove",
@@ -574,11 +581,14 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
       "run_widget_tests",
       "session_list",
       "session_open",
+      "start_cpu_profile",
       "stop_app",
+      "stop_cpu_profile",
+      "toggle_performance_overlay",
       "workspace_discover",
       "workspace_set_root",
       "workspace_show",
-    ];
+    ].sort();
     if (JSON.stringify(tools) !== JSON.stringify(expectedTools)) {
       throw new Error(`Unexpected Phase 1 tools exposure: ${JSON.stringify(tools)}`);
     }
@@ -907,6 +917,138 @@ async function checkPhase1RuntimeOverflowFlow(repoRoot: string): Promise<void> {
   });
 }
 
+async function checkPhase3ProfilingFlow(repoRoot: string): Promise<void> {
+  await withSampleAppClient(repoRoot, async (fixture, client) => {
+    await client.initialize();
+    await client.callTool("workspace_set_root", {
+      workspaceRoot: fixture.workspaceRoot,
+    });
+
+    const running = await client.callTool("run_app", {
+      platform: "ios",
+      mode: "debug",
+      dartDefines: ["FLUTTERHELM_SCENARIO=profile_demo"],
+    });
+    if (running.isError === true) {
+      const error = requireObject(requireObject(running.structuredContent, "run_app error").error, "run_app structured error");
+      throw new Error(`run_app failed: ${String(error.code)}: ${String(error.message)}`);
+    }
+    const runningStructured = requireObject(running.structuredContent, "run_app.structuredContent");
+    const sessionId = requireString(runningStructured.sessionId, "run_app.sessionId");
+    if (runningStructured.mode !== "debug") {
+      throw new Error(`Expected debug mode session for local iOS profiling, got ${String(runningStructured.mode)}`);
+    }
+
+    try {
+      const healthResource = await client.request("resources/read", {
+        uri: `session://${sessionId}/health`,
+      });
+      const healthContents = requireArray(healthResource.contents, "session health contents");
+      const healthBody = requireObject(healthContents[0], "session health content");
+      const health = JSON.parse(requireString(healthBody.text, "session health text")) as Record<string, unknown>;
+      if (health.ready !== true) {
+        throw new Error(`session health should be ready for profiling session: ${JSON.stringify(health)}`);
+      }
+      if (health.recommendedMode !== "profile") {
+        throw new Error(`session health should recommend profile mode, got ${JSON.stringify(health)}`);
+      }
+
+      const startCpu = await client.callTool("start_cpu_profile", {
+        sessionId,
+      });
+      if (startCpu.isError === true) {
+        throw new Error(`start_cpu_profile failed: ${JSON.stringify(startCpu.structuredContent)}`);
+      }
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 2000));
+
+      const stopCpu = await client.callTool("stop_cpu_profile", {
+        sessionId,
+      });
+      const stopCpuStructured = requireObject(stopCpu.structuredContent, "stop_cpu_profile.structuredContent");
+      const cpuResource = requireObject(stopCpuStructured.resource, "stop_cpu_profile.resource");
+      const cpuUri = requireString(cpuResource.uri, "stop_cpu_profile.resource.uri");
+      const cpuResult = await client.request("resources/read", { uri: cpuUri });
+      const cpuContents = requireArray(cpuResult.contents, "cpu resource contents");
+      const cpuBody = requireObject(cpuContents[0], "cpu resource content");
+      const cpuPayload = JSON.parse(requireString(cpuBody.text, "cpu resource text")) as Record<string, unknown>;
+      const cpuSummary = requireObject(cpuPayload.summary, "cpu summary");
+      if (Number(cpuSummary.sampleCount ?? 0) <= 0) {
+        throw new Error(`CPU profile should contain samples: ${JSON.stringify(cpuSummary)}`);
+      }
+
+      const timeline = await client.callTool("capture_timeline", {
+        sessionId,
+        durationMs: 1000,
+      });
+      const timelineStructured = requireObject(timeline.structuredContent, "capture_timeline.structuredContent");
+      const timelineResource = requireObject(timelineStructured.resource, "capture_timeline.resource");
+      const timelineUri = requireString(timelineResource.uri, "capture_timeline.resource.uri");
+      const timelineResult = await client.request("resources/read", { uri: timelineUri });
+      const timelineContents = requireArray(timelineResult.contents, "timeline resource contents");
+      const timelineBody = requireObject(timelineContents[0], "timeline resource content");
+      const timelinePayload = JSON.parse(requireString(timelineBody.text, "timeline resource text")) as Record<string, unknown>;
+      const timelineSummary = requireObject(timelinePayload.summary, "timeline summary");
+      if (Number(timelineSummary.eventCount ?? 0) <= 0) {
+        throw new Error(`Timeline capture should contain events: ${JSON.stringify(timelineSummary)}`);
+      }
+
+      const memory = await client.callTool("capture_memory_snapshot", {
+        sessionId,
+        gc: true,
+      });
+      const memoryStructured = requireObject(memory.structuredContent, "capture_memory_snapshot.structuredContent");
+      const memoryResource = requireObject(memoryStructured.resource, "capture_memory_snapshot.resource");
+      const memoryUri = requireString(memoryResource.uri, "capture_memory_snapshot.resource.uri");
+      const memoryResult = await client.request("resources/read", { uri: memoryUri });
+      const memoryContents = requireArray(memoryResult.contents, "memory resource contents");
+      const memoryBody = requireObject(memoryContents[0], "memory resource content");
+      const memoryPayload = JSON.parse(requireString(memoryBody.text, "memory resource text")) as Record<string, unknown>;
+      const memorySummary = requireObject(memoryPayload.summary, "memory summary");
+      if (Number(memorySummary.heapSnapshotBytes ?? 0) <= 0) {
+        throw new Error(`Memory snapshot should contain heap data: ${JSON.stringify(memorySummary)}`);
+      }
+
+      const overlay = await client.callTool("toggle_performance_overlay", {
+        sessionId,
+        enabled: true,
+      });
+      if (overlay.isError === true) {
+        throw new Error(`toggle_performance_overlay failed: ${JSON.stringify(overlay.structuredContent)}`);
+      }
+
+      const attached = await client.callTool("attach_app", {
+        sessionId,
+        platform: "ios",
+        mode: "debug",
+      });
+      const attachedStructured = requireObject(attached.structuredContent, "attach_app.structuredContent");
+      const attachedSessionId = requireString(attachedStructured.sessionId, "attach_app.sessionId");
+      const attachedTimeline = await client.callTool("capture_timeline", {
+        sessionId: attachedSessionId,
+        durationMs: 250,
+      });
+      if (attachedTimeline.isError !== true) {
+        throw new Error("capture_timeline should reject attached sessions");
+      }
+      const attachedError = requireObject(
+        requireObject(attachedTimeline.structuredContent, "attached profiling error").error,
+        "attached profiling structured error",
+      );
+      if (attachedError.code !== "PROFILE_OWNERSHIP_REQUIRED") {
+        throw new Error(`Expected PROFILE_OWNERSHIP_REQUIRED, got ${String(attachedError.code)}`);
+      }
+      const detailsResource = requireObject(attachedError.detailsResource, "attached profiling detailsResource");
+      if (detailsResource.uri !== `session://${attachedSessionId}/health`) {
+        throw new Error(`attached profiling failure should point to session health, got ${String(detailsResource.uri)}`);
+      }
+    } finally {
+      await client.callTool("stop_app", {
+        sessionId,
+      });
+    }
+  });
+}
+
 async function checkMkDocsBuild(repoRoot: string, harnessRoot: string): Promise<void> {
   const docsPython = resolveDocsPython(harnessRoot);
   if (!(await pathExists(docsPython))) {
@@ -991,7 +1133,7 @@ async function checkWorkflowGroups(repoRoot: string): Promise<void> {
     ["runtime_readonly", "Yes"],
     ["tests", "Yes"],
     ["runtime_interaction", "No"],
-    ["profiling", "No"],
+    ["profiling", "Yes"],
     ["platform_bridge", "No"],
   ]);
 
@@ -1286,6 +1428,7 @@ const CHECKS: Record<CheckName, (repoRoot: string, harnessRoot: string) => Promi
   "phase1-tool-exposure": (repoRoot) => checkPhase1ToolExposure(repoRoot),
   "phase1-sample-app-flow": (repoRoot) => checkPhase1SampleAppFlow(repoRoot),
   "phase1-runtime-overflow-flow": (repoRoot) => checkPhase1RuntimeOverflowFlow(repoRoot),
+  "phase3-profiling-flow": (repoRoot) => checkPhase3ProfilingFlow(repoRoot),
 };
 
 async function main(): Promise<void> {

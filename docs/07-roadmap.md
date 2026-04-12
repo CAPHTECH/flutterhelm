@@ -17,13 +17,14 @@ FlutterHelm は最初から全部を載せるべきではありません。
 
 ## 現在地点
 
-この repository では Phase 2 の beta checkpoint まで実装済みです。
+この repository では Phase 3 の profiling checkpoint まで実装済みです。
 
 - workspace/session/launcher/runtime_readonly/tests が local で動く
 - repo-local `fixtures/sample_app` で deterministic validation ができる
 - package search → approval → dependency add/remove が local で動く
 - integration test / coverage artifact / approval audit が local で動く
-- 以降の優先順位は profiling, native bridge, runtime interaction
+- vm_service-backed profiling / session health / owned-session guard が local で動く
+- 以降の優先順位は native bridge, runtime interaction
 
 ## Phase 0 — Foundation
 
@@ -120,9 +121,9 @@ FlutterHelm は最初から全部を載せるべきではありません。
 
 ### Exit criteria
 
-- profile mode session を扱える
+- owned session 上で profiling loop を扱える
 - CPU / memory / timeline が resource 化される
-- diagnostics failure が capability として説明される
+- diagnostics failure が `session://<id>/health` と capability metadata で説明される
 
 ## Phase 4 — Platform bridge
 

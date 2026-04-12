@@ -13,6 +13,11 @@ Map<String, Object?> buildServerCapabilities({
     'experimental': <String, Object?>{
       'contractVersion': flutterHelmContractVersion,
       'workflowStatus': toolRegistry.workflowStatus(config),
+      'profiling': const <String, Object?>{
+        'backend': 'vm_service',
+        'ownershipPolicy': 'owned_only',
+        'dtdRequired': false,
+      },
     },
   };
 }
