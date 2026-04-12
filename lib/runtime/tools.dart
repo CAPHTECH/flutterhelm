@@ -1,10 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutterhelm/artifacts/resources.dart';
 import 'package:flutterhelm/artifacts/store.dart';
-import 'package:flutterhelm/platform_bridge/support.dart';
 import 'package:flutterhelm/server/errors.dart';
-import 'package:flutterhelm/sessions/session.dart';
 import 'package:flutterhelm/sessions/session_store.dart';
 import 'package:flutterhelm/runtime/vm_service_support.dart';
 
@@ -12,10 +11,12 @@ class RuntimeToolService {
   RuntimeToolService({
     required this.sessionStore,
     required this.artifactStore,
+    required this.appStateBuilder,
   });
 
   final SessionStore sessionStore;
   final ArtifactStore artifactStore;
+  final SessionAppStatePayloadBuilder appStateBuilder;
 
   Future<Map<String, Object?>> getLogs({
     required String sessionId,
@@ -82,29 +83,7 @@ class RuntimeToolService {
 
   Future<Map<String, Object?>> getAppStateSummary({required String sessionId}) async {
     final session = sessionStore.requireById(sessionId);
-    final payload = <String, Object?>{
-      'sessionId': session.sessionId,
-      'ownership': session.ownership.wireName,
-      'state': session.state.wireName,
-      'stale': session.stale,
-      'platform': session.platform,
-      'deviceId': session.deviceId,
-      'target': session.target,
-      'mode': session.mode,
-      'nativeBridgeAvailablePlatforms': detectNativeBridgePlatformsSync(
-        session.workspaceRoot,
-      ),
-      'vmService': <String, Object?>{
-        'available': session.vmServiceAvailable,
-        'maskedUri': session.vmServiceMaskedUri,
-      },
-      'dtd': <String, Object?>{
-        'available': session.dtdAvailable,
-        'maskedUri': session.dtdMaskedUri,
-      },
-      'profileActive': session.profileActive,
-      'updatedAt': DateTime.now().toUtc().toIso8601String(),
-    };
+    final payload = await appStateBuilder(session);
     await artifactStore.writeSessionAppState(sessionId: sessionId, payload: payload);
     return <String, Object?>{
       ...payload,

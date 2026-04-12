@@ -42,6 +42,12 @@ class ArtifactStore {
   String sessionNativeHandoffUri(String sessionId, String platform) =>
       'native-handoff://$sessionId/$platform';
 
+  String sessionScreenshotUri(
+    String sessionId,
+    String captureId,
+    String format,
+  ) => 'screenshot://$sessionId/$captureId.$format';
+
   String testSummaryUri(String runId) => 'test-report://$runId/summary';
 
   String testDetailsUri(String runId) => 'test-report://$runId/details';
@@ -266,7 +272,8 @@ class ArtifactStore {
     return ResourceReadResult(
       uri: uri,
       mimeType: resolved.mimeType,
-      text: await file.readAsString(),
+      text: resolved.binary ? null : await file.readAsString(),
+      blob: resolved.binary ? base64Encode(await file.readAsBytes()) : null,
     );
   }
 
@@ -398,6 +405,23 @@ class ArtifactStore {
           title: 'Native handoff $sessionId $platform',
           description: 'Prepared native IDE handoff bundle.',
           mimeType: 'application/json',
+          sessionId: sessionId,
+        ));
+        continue;
+      }
+
+      final screenshotMatch =
+          RegExp(r'screenshot-(.+)\.(png|jpg|jpeg)$').firstMatch(entity.path);
+      if (screenshotMatch != null) {
+        final captureId = screenshotMatch.group(1)!;
+        final format = screenshotMatch.group(2)!;
+        resources.add(await _descriptorForFile(
+          file: entity,
+          uri: sessionScreenshotUri(sessionId, captureId, format),
+          name: 'session.screenshot.$sessionId.$captureId',
+          title: 'Screenshot $sessionId $captureId',
+          description: 'Captured runtime screenshot.',
+          mimeType: format == 'png' ? 'image/png' : 'image/jpeg',
           sessionId: sessionId,
         ));
       }
@@ -656,6 +680,21 @@ class ArtifactStore {
       );
     }
 
+    final screenshotMatch =
+        RegExp(r'^screenshot://([^/]+)/([^/]+\.(?:png|jpg|jpeg))$').firstMatch(uri);
+    if (screenshotMatch != null) {
+      return _ResolvedStoredFile(
+        path: p.join(
+          sessionArtifactsDir(screenshotMatch.group(1)!),
+          'screenshot-${screenshotMatch.group(2)!}',
+        ),
+        mimeType: screenshotMatch.group(2)!.endsWith('.png')
+            ? 'image/png'
+            : 'image/jpeg',
+        binary: true,
+      );
+    }
+
     final testMatch = RegExp(r'^test-report://([^/]+)/(summary|details)$').firstMatch(uri);
     if (testMatch != null) {
       return _ResolvedStoredFile(
@@ -682,8 +721,13 @@ class ArtifactStore {
 }
 
 class _ResolvedStoredFile {
-  const _ResolvedStoredFile({required this.path, required this.mimeType});
+  const _ResolvedStoredFile({
+    required this.path,
+    required this.mimeType,
+    this.binary = false,
+  });
 
   final String path;
   final String mimeType;
+  final bool binary;
 }

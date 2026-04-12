@@ -953,6 +953,406 @@ void main() {
     );
 
     test(
+      'supports runtime interaction contracts with a fake external driver',
+      () async {
+        final sandbox = await Directory.systemTemp.createTemp('flutterhelm-e2e');
+        addTearDown(() => sandbox.delete(recursive: true));
+
+        final sampleAppRoot = p.join(
+          Directory.current.path,
+          'fixtures',
+          'sample_app',
+        );
+        final stateDir = Directory(p.join(sandbox.path, 'state'));
+        final configPath = await _writeConfigFile(
+          p.join(sandbox.path, 'config.yaml'),
+          '''
+version: 1
+enabledWorkflows:
+  - workspace
+  - session
+  - launcher
+  - runtime_readonly
+  - runtime_interaction
+  - profiling
+  - platform_bridge
+  - tests
+adapters:
+  runtimeDriver:
+    enabled: true
+    command: ${Platform.resolvedExecutable}
+    args:
+      - run
+      - tool/fake_runtime_driver.dart
+    startupTimeoutMs: 15000
+''',
+        );
+        final client = await _TestMcpClient.start(
+          repoRoot: Directory.current.path,
+          workspaceRoot: sampleAppRoot,
+          stateDir: stateDir.path,
+          configPath: configPath,
+        );
+        addTearDown(client.close);
+
+        await _initializeClient(client);
+        await client.request('tools/call', <String, Object?>{
+          'name': 'workspace_set_root',
+          'arguments': <String, Object?>{'workspaceRoot': sampleAppRoot},
+        });
+
+        final toolsList = await client.request('tools/list');
+        final toolNames = (toolsList['tools'] as List<Object?>)
+            .cast<Map<Object?, Object?>>()
+            .map((Map<Object?, Object?> tool) => tool['name'])
+            .toSet();
+        expect(
+          toolNames,
+          containsAll(<String>[
+            'capture_screenshot',
+            'tap_widget',
+            'enter_text',
+            'scroll_until_visible',
+            'hot_reload',
+            'hot_restart',
+          ]),
+        );
+
+        final attached = await client.request('tools/call', <String, Object?>{
+          'name': 'attach_app',
+          'arguments': <String, Object?>{
+            'workspaceRoot': sampleAppRoot,
+            'platform': 'ios',
+            'deviceId': 'fake-ios-simulator',
+            'target': 'lib/main.dart',
+            'mode': 'debug',
+            'debugUrl': 'ws://127.0.0.1:34567/ws',
+          },
+        });
+        expect(attached['isError'], isFalse);
+        final attachedSessionId =
+            (((attached['structuredContent'] as Map<Object?, Object?>)['sessionId'])
+                as String);
+
+        final appState = await client.request('tools/call', <String, Object?>{
+          'name': 'get_app_state_summary',
+          'arguments': <String, Object?>{'sessionId': attachedSessionId},
+        });
+        final appStateStructured =
+            appState['structuredContent'] as Map<Object?, Object?>;
+        expect(appStateStructured['driverConnected'], isTrue);
+        expect(
+          (appStateStructured['supportedLocatorFields'] as List<Object?>)
+              .contains('valueKey'),
+          isTrue,
+        );
+
+        final tap = await client.request('tools/call', <String, Object?>{
+          'name': 'tap_widget',
+          'arguments': <String, Object?>{
+            'sessionId': attachedSessionId,
+            'locator': <String, Object?>{'valueKey': 'primaryButton'},
+          },
+        });
+        expect(tap['isError'], isFalse);
+
+        final enterText = await client.request('tools/call', <String, Object?>{
+          'name': 'enter_text',
+          'arguments': <String, Object?>{
+            'sessionId': attachedSessionId,
+            'locator': <String, Object?>{'valueKey': 'nameField'},
+            'text': 'Rin',
+            'submit': true,
+          },
+        });
+        expect(enterText['isError'], isFalse);
+
+        final scroll = await client.request('tools/call', <String, Object?>{
+          'name': 'scroll_until_visible',
+          'arguments': <String, Object?>{
+            'sessionId': attachedSessionId,
+            'locator': <String, Object?>{'valueKey': 'deepItem'},
+            'direction': 'down',
+          },
+        });
+        expect(scroll['isError'], isFalse);
+
+        final tapDeep = await client.request('tools/call', <String, Object?>{
+          'name': 'tap_widget',
+          'arguments': <String, Object?>{
+            'sessionId': attachedSessionId,
+            'locator': <String, Object?>{'valueKey': 'deepItem'},
+          },
+        });
+        expect(tapDeep['isError'], isFalse);
+
+        final screenshot = await client.request('tools/call', <String, Object?>{
+          'name': 'capture_screenshot',
+          'arguments': <String, Object?>{
+            'sessionId': attachedSessionId,
+            'format': 'png',
+          },
+        });
+        expect(screenshot['isError'], isFalse);
+        final screenshotStructured =
+            screenshot['structuredContent'] as Map<Object?, Object?>;
+        final screenshotUri =
+            ((screenshotStructured['resource'] as Map<Object?, Object?>)['uri'])
+                as String;
+        final screenshotResource = await client.request(
+          'resources/read',
+          <String, Object?>{'uri': screenshotUri},
+        );
+        final screenshotBody =
+            (screenshotResource['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        expect(screenshotBody['blob'], isNotNull);
+        expect(screenshotBody['text'], isNull);
+
+        final hotReload = await client.request('tools/call', <String, Object?>{
+          'name': 'hot_reload',
+          'arguments': <String, Object?>{'sessionId': attachedSessionId},
+        });
+        expect(hotReload['isError'], isTrue);
+        final hotReloadError =
+            (hotReload['structuredContent'] as Map<Object?, Object?>)['error']
+                as Map<Object?, Object?>;
+        expect(hotReloadError['code'], 'HOT_RELOAD_UNAVAILABLE');
+
+        final hotRestart = await client.request('tools/call', <String, Object?>{
+          'name': 'hot_restart',
+          'arguments': <String, Object?>{'sessionId': attachedSessionId},
+        });
+        expect(hotRestart['isError'], isTrue);
+        final hotRestartError =
+            (hotRestart['structuredContent'] as Map<Object?, Object?>)['error']
+                as Map<Object?, Object?>;
+        expect(hotRestartError['code'], 'HOT_RESTART_UNAVAILABLE');
+      },
+    );
+
+    test(
+      'runs real runtime interaction against the sample app on iOS simulator',
+      () async {
+        final sandbox = await Directory.systemTemp.createTemp('flutterhelm-e2e');
+        addTearDown(() => sandbox.delete(recursive: true));
+
+        final sampleAppRoot = p.join(
+          Directory.current.path,
+          'fixtures',
+          'sample_app',
+        );
+        final stateDir = Directory(p.join(sandbox.path, 'state'));
+        final configPath = await _writeConfigFile(
+          p.join(sandbox.path, 'config.yaml'),
+          '''
+version: 1
+enabledWorkflows:
+  - workspace
+  - session
+  - launcher
+  - runtime_readonly
+  - runtime_interaction
+  - profiling
+  - platform_bridge
+  - tests
+adapters:
+  runtimeDriver:
+    enabled: true
+    startupTimeoutMs: 15000
+''',
+        );
+        final client = await _TestMcpClient.start(
+          repoRoot: Directory.current.path,
+          workspaceRoot: sampleAppRoot,
+          stateDir: stateDir.path,
+          configPath: configPath,
+        );
+        addTearDown(client.close);
+
+        await _initializeClient(client);
+        await client.request('tools/call', <String, Object?>{
+          'name': 'workspace_set_root',
+          'arguments': <String, Object?>{'workspaceRoot': sampleAppRoot},
+        });
+
+        final running = await client.request(
+          'tools/call',
+          <String, Object?>{
+            'name': 'run_app',
+            'arguments': <String, Object?>{
+              'platform': 'ios',
+              'mode': 'debug',
+              'dartDefines': <String>['FLUTTERHELM_SCENARIO=interaction_demo'],
+            },
+          },
+          const Duration(minutes: 8),
+        );
+        expect(running['isError'], isFalse);
+        final runningStructured =
+            running['structuredContent'] as Map<Object?, Object?>;
+        final sessionId = runningStructured['sessionId'] as String;
+
+        addTearDown(() async {
+          final stopResult = await client.request('tools/call', <String, Object?>{
+            'name': 'stop_app',
+            'arguments': <String, Object?>{'sessionId': sessionId},
+          });
+          if (stopResult['isError'] == true) {
+            stderr.writeln(
+              'stop_app during teardown failed: ${stopResult['structuredContent']}',
+            );
+          }
+        });
+
+        final health = await client.request(
+          'resources/read',
+          <String, Object?>{'uri': 'session://$sessionId/health'},
+        );
+        final healthBody =
+            (health['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        final healthDecoded =
+            jsonDecode(healthBody['text'] as String) as Map<String, Object?>;
+        expect(healthDecoded['driverConfigured'], isTrue);
+
+        final screenshot = await client.request('tools/call', <String, Object?>{
+          'name': 'capture_screenshot',
+          'arguments': <String, Object?>{'sessionId': sessionId},
+        });
+        expect(screenshot['isError'], isFalse);
+
+        final tap = await client.request('tools/call', <String, Object?>{
+          'name': 'tap_widget',
+          'arguments': <String, Object?>{
+            'sessionId': sessionId,
+            'locator': <String, Object?>{'text': 'Tap primary'},
+          },
+        }, const Duration(minutes: 2));
+        expect(tap['isError'], isFalse);
+
+        final enterText = await client.request('tools/call', <String, Object?>{
+          'name': 'enter_text',
+          'arguments': <String, Object?>{
+            'sessionId': sessionId,
+            'locator': <String, Object?>{'textContains': 'Name input'},
+            'text': 'Codex',
+            'submit': true,
+          },
+        }, const Duration(minutes: 2));
+        expect(enterText['isError'], isFalse);
+
+        final scroll = await client.request('tools/call', <String, Object?>{
+          'name': 'scroll_until_visible',
+          'arguments': <String, Object?>{
+            'sessionId': sessionId,
+            'locator': <String, Object?>{'text': 'Deep action'},
+            'direction': 'down',
+            'maxScrolls': 10,
+          },
+        }, const Duration(minutes: 2));
+        expect(scroll['isError'], isFalse);
+
+        final tapDeep = await client.request('tools/call', <String, Object?>{
+          'name': 'tap_widget',
+          'arguments': <String, Object?>{
+            'sessionId': sessionId,
+            'locator': <String, Object?>{'text': 'Deep action'},
+          },
+        }, const Duration(minutes: 2));
+        expect(tapDeep['isError'], isFalse);
+
+        await Future<void>.delayed(const Duration(seconds: 2));
+
+        final logs = await client.request('tools/call', <String, Object?>{
+          'name': 'get_logs',
+          'arguments': <String, Object?>{
+            'sessionId': sessionId,
+            'stream': 'stdout',
+            'tailLines': 200,
+          },
+        });
+        final logsStructured =
+            logs['structuredContent'] as Map<Object?, Object?>;
+        final preview =
+            (logsStructured['preview'] as Map<Object?, Object?>)['stdout']
+                as String? ??
+            '';
+        expect(preview, contains('interaction: primary tapped'));
+        expect(preview, contains('interaction: text submitted=Codex'));
+        expect(preview, contains('interaction: deep action tapped'));
+
+        final hotReload = await client.request('tools/call', <String, Object?>{
+          'name': 'hot_reload',
+          'arguments': <String, Object?>{'sessionId': sessionId},
+        }, const Duration(minutes: 2));
+        expect(hotReload['isError'], isFalse);
+
+        final hotRestartAttempt = await client.request(
+          'tools/call',
+          <String, Object?>{
+            'name': 'hot_restart',
+            'arguments': <String, Object?>{'sessionId': sessionId},
+          },
+        );
+        final hotRestartStructured =
+            hotRestartAttempt['structuredContent'] as Map<Object?, Object?>;
+        expect(hotRestartStructured['status'], 'approval_required');
+
+        final hotRestartApproved = await client.request(
+          'tools/call',
+          <String, Object?>{
+            'name': 'hot_restart',
+            'arguments': <String, Object?>{
+              'sessionId': sessionId,
+              'approvalToken': hotRestartStructured['approvalRequestId'],
+            },
+          },
+          const Duration(minutes: 3),
+        );
+        expect(hotRestartApproved['isError'], isFalse);
+
+        final attached = await client.request('tools/call', <String, Object?>{
+          'name': 'attach_app',
+          'arguments': <String, Object?>{
+            'sessionId': sessionId,
+            'workspaceRoot': sampleAppRoot,
+            'platform': 'ios',
+            'target': 'lib/main.dart',
+            'mode': 'debug',
+          },
+        });
+        expect(attached['isError'], isFalse);
+        final attachedSessionId =
+            (((attached['structuredContent'] as Map<Object?, Object?>)['sessionId'])
+                as String);
+
+        final attachedHotReload = await client.request(
+          'tools/call',
+          <String, Object?>{
+            'name': 'hot_reload',
+            'arguments': <String, Object?>{'sessionId': attachedSessionId},
+          },
+        );
+        expect(attachedHotReload['isError'], isTrue);
+
+        final attachedHotRestart = await client.request(
+          'tools/call',
+          <String, Object?>{
+            'name': 'hot_restart',
+            'arguments': <String, Object?>{'sessionId': attachedSessionId},
+          },
+        );
+        expect(attachedHotRestart['isError'], isTrue);
+        final attachedHotRestartError =
+            (attachedHotRestart['structuredContent'] as Map<Object?, Object?>)['error']
+                as Map<Object?, Object?>;
+        expect(attachedHotRestartError['code'], 'HOT_RESTART_UNAVAILABLE');
+      },
+      timeout: const Timeout(Duration(minutes: 16)),
+    );
+
+    test(
       'returns structured tool errors when no active root is available',
       () async {
         final sandbox = await Directory.systemTemp.createTemp(
@@ -1036,6 +1436,11 @@ Future<void> _writeTextFile(String path, String contents) async {
   await File(path).writeAsString(contents);
 }
 
+Future<String> _writeConfigFile(String path, String contents) async {
+  await _writeTextFile(path, contents);
+  return path;
+}
+
 class _TestMcpClient {
   _TestMcpClient._({required this.process, required this.workspaceRoot}) {
     process.stdout
@@ -1054,12 +1459,15 @@ class _TestMcpClient {
     required String repoRoot,
     required String? workspaceRoot,
     required String stateDir,
+    String? configPath,
     bool allowRootFallback = false,
   }) async {
     final process = await Process.start(Platform.resolvedExecutable, <String>[
       'run',
       'bin/flutterhelm.dart',
       'serve',
+      if (configPath != null) '--config',
+      if (configPath != null) configPath,
       '--state-dir',
       stateDir,
       if (allowRootFallback) '--allow-root-fallback',
@@ -1145,7 +1553,9 @@ class _TestMcpClient {
     }
 
     if (message['error'] case final Map<Object?, Object?> error) {
-      completer.completeError(error['message'] ?? 'Unknown protocol error');
+      completer.completeError(
+        'Protocol error for request $id: ${jsonEncode(error)}',
+      );
       return;
     }
 

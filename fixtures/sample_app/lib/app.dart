@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-enum DemoScenario { normal, overflow, profileDemo }
+enum DemoScenario { normal, overflow, profileDemo, interactionDemo }
 
 DemoScenario parseScenario(String raw) {
   switch (raw) {
@@ -10,6 +10,8 @@ DemoScenario parseScenario(String raw) {
       return DemoScenario.overflow;
     case 'profile_demo':
       return DemoScenario.profileDemo;
+    case 'interaction_demo':
+      return DemoScenario.interactionDemo;
     default:
       return DemoScenario.normal;
   }
@@ -53,6 +55,8 @@ class _SampleAppState extends State<SampleApp> {
           ? const OverflowPage()
           : widget.scenario == DemoScenario.profileDemo
           ? const ProfileDemoPage()
+          : widget.scenario == DemoScenario.interactionDemo
+          ? const InteractionDemoPage()
           : CounterPage(counter: _counter),
     );
   }
@@ -238,6 +242,140 @@ class _ProfileDemoPageState extends State<ProfileDemoPage>
             Text(
               'Active allocations: ${_allocations.length}',
               style: Theme.of(context).textTheme.bodyLarge,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class InteractionDemoPage extends StatefulWidget {
+  const InteractionDemoPage({super.key});
+
+  @override
+  State<InteractionDemoPage> createState() => _InteractionDemoPageState();
+}
+
+class _InteractionDemoPageState extends State<InteractionDemoPage> {
+  final TextEditingController _controller = TextEditingController();
+  bool _tapped = false;
+  String _submittedText = 'Submission pending';
+  bool _deepTapped = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _handlePrimaryTap() {
+    setState(() {
+      _tapped = !_tapped;
+    });
+    // ignore: avoid_print
+    print('interaction: primary tapped');
+  }
+
+  void _handleSubmit(String value) {
+    setState(() {
+      _submittedText = 'Submitted: $value';
+    });
+    // ignore: avoid_print
+    print('interaction: text submitted=$value');
+  }
+
+  void _handleDeepAction() {
+    setState(() {
+      _deepTapped = true;
+    });
+    // ignore: avoid_print
+    print('interaction: deep action tapped');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Interaction Demo')),
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Semantics(
+                label: 'Tap primary',
+                button: true,
+                child: ElevatedButton(
+                  key: const ValueKey<String>('primaryButton'),
+                  onPressed: _handlePrimaryTap,
+                  child: Text(_tapped ? 'Tap primary again' : 'Tap primary'),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                _tapped ? 'Status: tapped' : 'Status: idle',
+                key: const ValueKey<String>('statusLabel'),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: Semantics(
+                label: 'Name input',
+                textField: true,
+                child: TextField(
+                  key: const ValueKey<String>('nameField'),
+                  controller: _controller,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: _handleSubmit,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    labelText: 'Name input',
+                    hintText: 'Enter name',
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                _submittedText,
+                key: const ValueKey<String>('submissionLabel'),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text('Scroll area'),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: 18,
+                itemBuilder: (BuildContext context, int index) {
+                  if (index == 13) {
+                    return Semantics(
+                      label: 'Deep action',
+                      button: true,
+                      child: ListTile(
+                        key: const ValueKey<String>('deepItem'),
+                        title: const Text('Deep action'),
+                        subtitle: Text(
+                          _deepTapped
+                              ? 'Deep action tapped'
+                              : 'Deep action pending',
+                          key: const ValueKey<String>('deepStatus'),
+                        ),
+                        onTap: _handleDeepAction,
+                      ),
+                    );
+                  }
+                  return ListTile(
+                    title: Text('Filler item ${index + 1}'),
+                  );
+                },
+              ),
             ),
           ],
         ),

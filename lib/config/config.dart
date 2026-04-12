@@ -132,18 +132,29 @@ class AdaptersConfig {
     required this.flutterExecutable,
     required this.dtdEnabled,
     required this.runtimeDriverEnabled,
+    required this.runtimeDriverCommand,
+    required this.runtimeDriverArgs,
+    required this.runtimeDriverStartupTimeoutMs,
   });
 
   final String delegateType;
   final String flutterExecutable;
   final bool dtdEnabled;
   final bool runtimeDriverEnabled;
+  final String runtimeDriverCommand;
+  final List<String> runtimeDriverArgs;
+  final int runtimeDriverStartupTimeoutMs;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'delegate': <String, Object?>{'type': delegateType},
     'flutterCli': <String, Object?>{'executable': flutterExecutable},
     'dtd': <String, Object?>{'enabled': dtdEnabled},
-    'runtimeDriver': <String, Object?>{'enabled': runtimeDriverEnabled},
+    'runtimeDriver': <String, Object?>{
+      'enabled': runtimeDriverEnabled,
+      'command': runtimeDriverCommand,
+      'args': runtimeDriverArgs,
+      'startupTimeoutMs': runtimeDriverStartupTimeoutMs,
+    },
   };
 }
 
@@ -199,6 +210,13 @@ class FlutterHelmConfig {
         flutterExecutable: 'flutter',
         dtdEnabled: true,
         runtimeDriverEnabled: false,
+        runtimeDriverCommand: 'npx',
+        runtimeDriverArgs: <String>[
+          '-y',
+          '@mobilenext/mobile-mcp@latest',
+          '--stdio',
+        ],
+        runtimeDriverStartupTimeoutMs: 5000,
       ),
     );
   }
@@ -264,6 +282,19 @@ class FlutterHelmConfig {
         runtimeDriverEnabled:
             _boolValue(_mapValue(adapters['runtimeDriver'])['enabled']) ??
             false,
+        runtimeDriverCommand:
+            _stringValue(_mapValue(adapters['runtimeDriver'])['command']) ??
+            'npx',
+        runtimeDriverArgs:
+            _stringList(_mapValue(adapters['runtimeDriver'])['args']) ??
+            const <String>[
+              '-y',
+              '@mobilenext/mobile-mcp@latest',
+              '--stdio',
+            ],
+        runtimeDriverStartupTimeoutMs:
+            _intValue(_mapValue(adapters['runtimeDriver'])['startupTimeoutMs']) ??
+            5000,
       ),
     );
   }

@@ -39,7 +39,8 @@ type CheckName =
   | "phase1-sample-app-flow"
   | "phase1-runtime-overflow-flow"
   | "phase3-profiling-flow"
-  | "phase4-platform-bridge-flow";
+  | "phase4-platform-bridge-flow"
+  | "phase5-runtime-interaction-flow";
 
 interface ContractCaseInput {
   checks?: CheckName[];
@@ -86,7 +87,7 @@ class Phase0HarnessClient {
     repoRoot: string,
     stateDir: string,
     clientRoots: string[],
-    options: { allowRootFallback?: boolean } = {},
+    options: { allowRootFallback?: boolean; configPath?: string } = {},
   ): Promise<Phase0HarnessClient> {
     const child = spawn(
       "mise",
@@ -99,6 +100,7 @@ class Phase0HarnessClient {
         "serve",
         "--state-dir",
         stateDir,
+        ...(options.configPath ? ["--config", options.configPath] : []),
         ...(options.allowRootFallback ? ["--allow-root-fallback"] : []),
       ],
       {
@@ -292,6 +294,7 @@ async function withPhase0Client<T>(
 async function withSampleAppClient<T>(
   repoRoot: string,
   callback: (fixture: Phase0Fixture, client: Phase0HarnessClient) => Promise<T>,
+  options: { configText?: string } = {},
 ): Promise<T> {
   const fixture = await createSampleAppFixture(repoRoot);
   const pubGet = await runCommandCapture(
@@ -304,10 +307,17 @@ async function withSampleAppClient<T>(
     throw new Error(pubGet.stderr || pubGet.stdout || "flutter pub get failed for sample app fixture");
   }
 
+  let configPath: string | undefined;
+  if (options.configText) {
+    configPath = resolve(fixture.sandboxDir, "config.yaml");
+    await writeFile(configPath, options.configText);
+  }
+
   const client = await Phase0HarnessClient.start(
     repoRoot,
     fixture.stateDir,
     [fixture.workspaceRoot],
+    { configPath },
   );
   try {
     return await callback(fixture, client);
@@ -315,6 +325,53 @@ async function withSampleAppClient<T>(
     await client.close();
     await rm(fixture.sandboxDir, { recursive: true, force: true });
   }
+}
+
+function buildSampleAppConfig(
+  fixture: Phase0Fixture,
+  options: {
+    enableRuntimeInteraction?: boolean;
+    runtimeDriverEnabled?: boolean;
+    runtimeDriverStartupTimeoutMs?: number;
+  } = {},
+): string {
+  const workflows = [
+    "workspace",
+    "session",
+    "launcher",
+    "runtime_readonly",
+    "tests",
+    "profiling",
+    "platform_bridge",
+    ...(options.enableRuntimeInteraction ? ["runtime_interaction"] : []),
+  ];
+  const runtimeDriverEnabled = options.runtimeDriverEnabled ?? false;
+  const runtimeDriverStartupTimeoutMs = options.runtimeDriverStartupTimeoutMs ?? 5000;
+  return `version: 1
+workspace:
+  roots:
+    - ${JSON.stringify(fixture.workspaceRoot)}
+defaults:
+  target: lib/main.dart
+  mode: debug
+enabledWorkflows:
+${workflows.map((workflow) => `  - ${workflow}`).join("\n")}
+fallbacks:
+  allowRootFallback: false
+retention:
+  heavyArtifactsDays: 7
+  metadataDays: 30
+safety:
+  confirmBefore:
+    - dependency_add
+    - dependency_remove
+    - hot_restart
+    - build_app:release
+adapters:
+  runtimeDriver:
+    enabled: ${runtimeDriverEnabled ? "true" : "false"}
+    startupTimeoutMs: ${runtimeDriverStartupTimeoutMs}
+`;
 }
 
 async function checkPhase0ServerSmoke(repoRoot: string): Promise<void> {
@@ -540,7 +597,7 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
       ["launcher", true],
       ["runtime_readonly", true],
       ["tests", true],
-      ["runtime_interaction", false],
+      ["runtime_interaction", true],
       ["profiling", true],
       ["platform_bridge", true],
     ] as const) {
@@ -567,6 +624,19 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
         throw new Error(`platformBridge.supportedPlatforms is missing ${platform}`);
       }
     }
+    const runtimeInteraction = requireObject(
+      experimental.runtimeInteraction,
+      "capabilities.experimental.runtimeInteraction",
+    );
+    if (
+      runtimeInteraction.defaultEnabled !== false
+      || runtimeInteraction.uiBackend !== "external_adapter"
+      || runtimeInteraction.hotOpBackend !== "flutter_daemon"
+      || runtimeInteraction.screenshotWorkflow !== "runtime_readonly"
+      || runtimeInteraction.hotOpsOwnershipPolicy !== "owned_only"
+    ) {
+      throw new Error(`Unexpected runtime interaction capability metadata: ${JSON.stringify(runtimeInteraction)}`);
+    }
 
     const toolsList = await client.request("tools/list");
     const tools = requireArray(toolsList.tools, "tools/list.tools")
@@ -576,6 +646,7 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
     const expectedTools = [
       "analyze_project",
       "attach_app",
+      "capture_screenshot",
       "capture_memory_snapshot",
       "capture_timeline",
       "collect_coverage",
@@ -1272,6 +1343,228 @@ async function checkPhase4PlatformBridgeFlow(repoRoot: string): Promise<void> {
   }
 }
 
+async function checkPhase5RuntimeInteractionFlow(repoRoot: string): Promise<void> {
+  const fixture = await createSampleAppFixture(repoRoot);
+  const pubGet = await runCommandCapture(
+    "mise",
+    ["exec", "--", "flutter", "pub", "get"],
+    fixture.workspaceRoot,
+  );
+  if (pubGet.exitCode !== 0) {
+    await rm(fixture.sandboxDir, { recursive: true, force: true });
+    throw new Error(pubGet.stderr || pubGet.stdout || "flutter pub get failed for sample app fixture");
+  }
+
+  const configPath = resolve(fixture.sandboxDir, "config.yaml");
+  await writeFile(
+    configPath,
+    buildSampleAppConfig(fixture, {
+      enableRuntimeInteraction: true,
+      runtimeDriverEnabled: true,
+      runtimeDriverStartupTimeoutMs: 15000,
+    }),
+  );
+  const client = await Phase0HarnessClient.start(
+    repoRoot,
+    fixture.stateDir,
+    [fixture.workspaceRoot],
+    { configPath },
+  );
+
+  try {
+    const initialize = await client.initialize();
+    const capabilities = requireObject(initialize.capabilities, "initialize.capabilities");
+    const experimental = requireObject(capabilities.experimental, "capabilities.experimental");
+    const runtimeInteraction = requireObject(
+      experimental.runtimeInteraction,
+      "capabilities.experimental.runtimeInteraction",
+    );
+    if (runtimeInteraction.defaultEnabled !== false) {
+      throw new Error(`runtimeInteraction.defaultEnabled should remain false, got ${JSON.stringify(runtimeInteraction)}`);
+    }
+
+    await client.callTool("workspace_set_root", {
+      workspaceRoot: fixture.workspaceRoot,
+    });
+
+    const toolsList = await client.request("tools/list");
+    const toolNames = requireArray(toolsList.tools, "tools/list.tools")
+      .map((tool) => requireObject(tool, "tool"))
+      .map((tool) => requireString(tool.name, "tool.name"));
+    for (const expected of [
+      "tap_widget",
+      "enter_text",
+      "scroll_until_visible",
+      "hot_reload",
+      "hot_restart",
+      "capture_screenshot",
+    ]) {
+      if (!toolNames.includes(expected)) {
+        throw new Error(`tools/list is missing runtime interaction tool ${expected}`);
+      }
+    }
+
+    const running = await client.callTool("run_app", {
+      platform: "ios",
+      mode: "debug",
+      dartDefines: ["FLUTTERHELM_SCENARIO=interaction_demo"],
+    });
+    if (running.isError === true) {
+      const error = requireObject(requireObject(running.structuredContent, "run_app error").error, "run_app structured error");
+      throw new Error(`run_app failed: ${String(error.code)}: ${String(error.message)}`);
+    }
+    const runningStructured = requireObject(running.structuredContent, "run_app.structuredContent");
+    const sessionId = requireString(runningStructured.sessionId, "run_app.sessionId");
+
+    try {
+      const healthResource = await client.request("resources/read", {
+        uri: `session://${sessionId}/health`,
+      });
+      const healthContents = requireArray(healthResource.contents, "session health contents");
+      const healthBody = requireObject(healthContents[0], "session health content");
+      const health = JSON.parse(requireString(healthBody.text, "session health text")) as Record<string, unknown>;
+      if (health.driverConfigured !== true || health.driverConnected !== true) {
+        throw new Error(`runtime interaction health should report a connected driver: ${JSON.stringify(health)}`);
+      }
+      const locatorFields = requireArray(health.supportedLocatorFields, "session health supportedLocatorFields");
+      if (!locatorFields.includes("text") || !locatorFields.includes("label")) {
+        throw new Error(`runtime interaction health is missing basic locator fields: ${JSON.stringify(locatorFields)}`);
+      }
+
+      const screenshot = await client.callTool("capture_screenshot", {
+        sessionId,
+      });
+      if (screenshot.isError === true) {
+        throw new Error(`capture_screenshot failed: ${JSON.stringify(screenshot.structuredContent)}`);
+      }
+      const screenshotStructured = requireObject(screenshot.structuredContent, "capture_screenshot.structuredContent");
+      const screenshotResource = requireObject(screenshotStructured.resource, "capture_screenshot.resource");
+      const screenshotUri = requireString(screenshotResource.uri, "capture_screenshot.resource.uri");
+      const screenshotResult = await client.request("resources/read", {
+        uri: screenshotUri,
+      });
+      const screenshotContentsValue = screenshotResult.contents;
+      if (!Array.isArray(screenshotContentsValue)) {
+        throw new Error(`Expected screenshot contents to be an array: ${JSON.stringify(screenshotResult)}`);
+      }
+      const screenshotContents = screenshotContentsValue;
+      const screenshotBody = requireObject(screenshotContents[0], "screenshot body");
+      requireString(screenshotBody.blob, "screenshot blob");
+      if ("text" in screenshotBody && screenshotBody.text != null) {
+        throw new Error("Screenshot resource should be binary-only");
+      }
+
+      const interactionSteps: Array<{ toolName: string; argumentsPayload: Record<string, unknown> }> = [
+        { toolName: "tap_widget", argumentsPayload: { sessionId, locator: { text: "Tap primary" } } },
+        {
+          toolName: "enter_text",
+          argumentsPayload: {
+            sessionId,
+            locator: { textContains: "Name input" },
+            text: "Codex",
+            submit: true,
+          },
+        },
+        {
+          toolName: "scroll_until_visible",
+          argumentsPayload: {
+            sessionId,
+            locator: { text: "Deep action" },
+            direction: "down",
+            maxScrolls: 10,
+          },
+        },
+        { toolName: "tap_widget", argumentsPayload: { sessionId, locator: { text: "Deep action" } } },
+      ];
+
+      for (const step of interactionSteps) {
+        const result = await client.callTool(step.toolName, step.argumentsPayload);
+        if (result.isError === true) {
+          throw new Error(`${step.toolName} failed: ${JSON.stringify(result.structuredContent)}`);
+        }
+      }
+
+      let preview = "";
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const logs = await client.callTool("get_logs", {
+          sessionId,
+          stream: "stdout",
+          tailLines: 200,
+        });
+        const logsStructured = requireObject(logs.structuredContent, "get_logs.structuredContent");
+        preview =
+          (requireObject(logsStructured.preview, "get_logs.preview").stdout as string | undefined) ??
+          "";
+        if (preview.includes("interaction: deep action tapped")) {
+          break;
+        }
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 1000));
+      }
+      for (const expected of [
+        "interaction: primary tapped",
+        "interaction: text submitted=Codex",
+        "interaction: deep action tapped",
+      ]) {
+        if (!preview.includes(expected)) {
+          throw new Error(`get_logs preview is missing ${expected}: ${preview}`);
+        }
+      }
+
+      const hotReload = await client.callTool("hot_reload", {
+        sessionId,
+      });
+      if (hotReload.isError === true) {
+        throw new Error(`hot_reload failed: ${JSON.stringify(hotReload.structuredContent)}`);
+      }
+
+      const hotRestartAttempt = await client.callTool("hot_restart", {
+        sessionId,
+      });
+      const hotRestartAttemptStructured = requireObject(
+        hotRestartAttempt.structuredContent,
+        "hot_restart approval structuredContent",
+      );
+      if (hotRestartAttemptStructured.status !== "approval_required") {
+        throw new Error(`hot_restart should require approval, got ${JSON.stringify(hotRestartAttemptStructured)}`);
+      }
+      const hotRestartApproved = await client.callTool("hot_restart", {
+        sessionId,
+        approvalToken: requireString(
+          hotRestartAttemptStructured.approvalRequestId,
+          "hot_restart.approvalRequestId",
+        ),
+      });
+      if (hotRestartApproved.isError === true) {
+        throw new Error(`hot_restart approved replay failed: ${JSON.stringify(hotRestartApproved.structuredContent)}`);
+      }
+
+      const attached = await client.callTool("attach_app", {
+        sessionId,
+        platform: "ios",
+        mode: "debug",
+      });
+      const attachedStructured = requireObject(attached.structuredContent, "attach_app.structuredContent");
+      const attachedSessionId = requireString(attachedStructured.sessionId, "attach_app.sessionId");
+
+      for (const toolName of ["hot_reload", "hot_restart"]) {
+        const result = await client.callTool(toolName, {
+          sessionId: attachedSessionId,
+        });
+        if (result.isError !== true) {
+          throw new Error(`${toolName} should reject attached sessions`);
+        }
+      }
+    } finally {
+      await client.callTool("stop_app", {
+        sessionId,
+      });
+    }
+  } finally {
+    await client.close();
+    await rm(fixture.sandboxDir, { recursive: true, force: true });
+  }
+}
+
 async function checkMkDocsBuild(repoRoot: string, harnessRoot: string): Promise<void> {
   const docsPython = resolveDocsPython(harnessRoot);
   if (!(await pathExists(docsPython))) {
@@ -1653,6 +1946,7 @@ const CHECKS: Record<CheckName, (repoRoot: string, harnessRoot: string) => Promi
   "phase1-runtime-overflow-flow": (repoRoot) => checkPhase1RuntimeOverflowFlow(repoRoot),
   "phase3-profiling-flow": (repoRoot) => checkPhase3ProfilingFlow(repoRoot),
   "phase4-platform-bridge-flow": (repoRoot) => checkPhase4PlatformBridgeFlow(repoRoot),
+  "phase5-runtime-interaction-flow": (repoRoot) => checkPhase5RuntimeInteractionFlow(repoRoot),
 };
 
 async function main(): Promise<void> {

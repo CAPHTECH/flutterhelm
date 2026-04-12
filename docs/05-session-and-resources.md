@@ -128,6 +128,7 @@ server 再起動後、live process handle を持たない session は `stale=tru
 - owned でも stale session に対する mutation は禁止
 - live VM service がある session のみ `get_widget_tree` を許可
 - profiling は owned + running + live VM service session のみ許可
+- hot reload / restart は owned + running + managed `flutter run` session のみ許可
 
 ## 6. Resources の位置づけ
 
@@ -182,6 +183,8 @@ public profiling resource は summary JSON を返し、raw heap snapshot は ses
 ## 7.5 assets / visuals
 
 - `screenshot://<session-id>/<capture-id>.png`
+
+`screenshot://...` resource は binary payload を返します。`resources/read` では `text` ではなく `blob` を使って base64 で搬送します。
 
 ## 7.6 native handoff
 
@@ -358,12 +361,24 @@ Tool は極力この形で返します。
   "vmServiceAvailable": true,
   "dtdAvailable": false,
   "backend": "vm_service",
-  "profileActive": false
+  "profileActive": false,
+  "runtimeDriverEnabled": true,
+  "driverConfigured": true,
+  "driverConnected": true,
+  "driverName": "mobile-mcp",
+  "driverCapabilities": {
+    "backend": "external_adapter",
+    "supportedPlatforms": ["ios"],
+    "supportedActions": ["tap", "enter_text", "scroll_until_visible", "capture_screenshot"]
+  },
+  "supportedLocatorFields": ["text", "textContains", "label", "labelContains", "index", "visibleOnly"],
+  "hotReloadAvailable": true,
+  "hotRestartAvailable": true
 }
 ```
 
 この resource は profiling failure の `detailsResource` としても使われます。  
-attached / stale / release session では `issues` と `guidance` が増え、なぜ profiling が拒否されたかを short error とは別に読めます。
+attached / stale / release session では `issues` と `guidance` が増え、なぜ profiling や hot op が拒否されたかを short error とは別に読めます。runtime interaction を有効化した場合は driver の接続状態と supported locator fields もここに集約されます。
 
 ## 14. このモデルの効用
 

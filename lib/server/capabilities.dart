@@ -24,6 +24,13 @@ Map<String, Object?> buildServerCapabilities({
         'supportedPlatforms': <String>['ios', 'android'],
         'defaultEnabled': true,
       },
+      'runtimeInteraction': const <String, Object?>{
+        'defaultEnabled': false,
+        'uiBackend': 'external_adapter',
+        'hotOpBackend': 'flutter_daemon',
+        'screenshotWorkflow': 'runtime_readonly',
+        'hotOpsOwnershipPolicy': 'owned_only',
+      },
     },
   };
 }

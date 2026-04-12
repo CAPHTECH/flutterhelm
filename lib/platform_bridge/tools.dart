@@ -211,11 +211,11 @@ class NativeBridgeToolService {
     final stderr = await artifactStore.readStoredResource(
       artifactStore.sessionLogUri(sessionId, 'stderr'),
     );
+    final stdoutText = stdout?.text ?? '';
+    final stderrText = stderr?.text ?? '';
     return <String, Object?>{
-      if (stdout != null && stdout.text.trim().isNotEmpty)
-        'stdout': _tailLines(stdout.text, tailLines),
-      if (stderr != null && stderr.text.trim().isNotEmpty)
-        'stderr': _tailLines(stderr.text, tailLines),
+      if (stdoutText.trim().isNotEmpty) 'stdout': _tailLines(stdoutText, tailLines),
+      if (stderrText.trim().isNotEmpty) 'stderr': _tailLines(stderrText, tailLines),
     };
   }
 

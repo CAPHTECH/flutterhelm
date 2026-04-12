@@ -82,6 +82,21 @@ class ToolRegistry {
   }
 }
 
+const Map<String, Object?> _locatorSchema = <String, Object?>{
+  'type': 'object',
+  'properties': <String, Object?>{
+    'text': <String, Object?>{'type': 'string'},
+    'textContains': <String, Object?>{'type': 'string'},
+    'label': <String, Object?>{'type': 'string'},
+    'labelContains': <String, Object?>{'type': 'string'},
+    'valueKey': <String, Object?>{'type': 'string'},
+    'type': <String, Object?>{'type': 'string'},
+    'index': <String, Object?>{'type': 'integer', 'minimum': 0},
+    'visibleOnly': <String, Object?>{'type': 'boolean'},
+  },
+  'additionalProperties': false,
+};
+
 List<ToolDefinition> _buildDefinitions() {
   return const <ToolDefinition>[
     ToolDefinition(
@@ -456,7 +471,20 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Capture a screenshot as a resource.',
       workflow: 'runtime_readonly',
       risk: RiskClass.boundedMutation,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'format': <String, Object?>{
+            'type': 'string',
+            'enum': <String>['png', 'jpg', 'jpeg'],
+            'default': 'png',
+          },
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'run_unit_tests',
@@ -557,7 +585,17 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Tap a widget via a runtime driver.',
       workflow: 'runtime_interaction',
       risk: RiskClass.runtimeControl,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'locator': _locatorSchema,
+          'timeoutMs': <String, Object?>{'type': 'integer', 'minimum': 100},
+        },
+        'required': <String>['sessionId', 'locator'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'enter_text',
@@ -565,7 +603,20 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Enter text via a runtime driver.',
       workflow: 'runtime_interaction',
       risk: RiskClass.runtimeControl,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'locator': _locatorSchema,
+          'text': <String, Object?>{'type': 'string'},
+          'replaceExisting': <String, Object?>{'type': 'boolean', 'default': true},
+          'submit': <String, Object?>{'type': 'boolean', 'default': false},
+          'timeoutMs': <String, Object?>{'type': 'integer', 'minimum': 100},
+        },
+        'required': <String>['sessionId', 'locator', 'text'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'scroll_until_visible',
@@ -573,7 +624,24 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Scroll until a widget is visible.',
       workflow: 'runtime_interaction',
       risk: RiskClass.runtimeControl,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'locator': _locatorSchema,
+          'direction': <String, Object?>{
+            'type': 'string',
+            'enum': <String>['up', 'down', 'left', 'right'],
+            'default': 'down',
+          },
+          'maxScrolls': <String, Object?>{'type': 'integer', 'minimum': 1, 'maximum': 20},
+          'stepPixels': <String, Object?>{'type': 'integer', 'minimum': 40},
+          'timeoutMs': <String, Object?>{'type': 'integer', 'minimum': 100},
+        },
+        'required': <String>['sessionId', 'locator'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'hot_reload',
@@ -581,7 +649,15 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Trigger a hot reload.',
       workflow: 'runtime_interaction',
       risk: RiskClass.runtimeControl,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'hot_restart',
@@ -589,7 +665,16 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Trigger a hot restart.',
       workflow: 'runtime_interaction',
       risk: RiskClass.stateDestructive,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'approvalToken': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['sessionId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'start_cpu_profile',

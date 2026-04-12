@@ -1,0 +1,15 @@
+{
+  "id": "ios-runtime-interaction",
+  "mode": "software",
+  "tags": ["interaction"],
+  "input": {
+    "checks": ["phase5-runtime-interaction-flow"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": [
+      "check:phase5-runtime-interaction-flow:ok",
+      "summary:ios-runtime-interaction"
+    ]
+  }
+}

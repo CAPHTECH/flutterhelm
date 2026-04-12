@@ -4,6 +4,7 @@ import 'package:sample_app/app.dart';
 void main() {
   test('parseScenario resolves overflow and normal inputs', () {
     expect(parseScenario('overflow'), DemoScenario.overflow);
+    expect(parseScenario('interaction_demo'), DemoScenario.interactionDemo);
     expect(parseScenario('anything-else'), DemoScenario.normal);
   });
 

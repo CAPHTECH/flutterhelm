@@ -17,7 +17,7 @@ FlutterHelm は最初から全部を載せるべきではありません。
 
 ## 現在地点
 
-この repository では Phase 4 の platform bridge checkpoint まで実装済みです。
+この repository では Phase 5 の optional runtime interaction checkpoint まで実装済みです。
 
 - workspace/session/launcher/runtime_readonly/tests が local で動く
 - repo-local `fixtures/sample_app` で deterministic validation ができる
@@ -25,7 +25,8 @@ FlutterHelm は最初から全部を載せるべきではありません。
 - integration test / coverage artifact / approval audit が local で動く
 - vm_service-backed profiling / session health / owned-session guard が local で動く
 - native handoff bundle / iOS local-network hypothesis / Android synthetic contract が local で動く
-- 以降の優先順位は runtime interaction
+- opt-in runtime interaction / screenshot artifact / hot reload-restart / attached-session guard が local で動く
+- 以降の優先順位は hardening / ecosystem
 
 ## Phase 0 — Foundation
 

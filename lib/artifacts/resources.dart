@@ -2,10 +2,14 @@ import 'dart:convert';
 
 import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/config/config.dart';
-import 'package:flutterhelm/platform_bridge/support.dart';
 import 'package:flutterhelm/policies/roots.dart';
 import 'package:flutterhelm/server/errors.dart';
 import 'package:flutterhelm/sessions/session.dart';
+
+typedef SessionHealthPayloadBuilder =
+    Future<Map<String, Object?>> Function(SessionRecord session);
+typedef SessionAppStatePayloadBuilder =
+    Future<Map<String, Object?>> Function(SessionRecord session);
 
 class ResourceDescriptor {
   const ResourceDescriptor({
@@ -69,26 +73,39 @@ class ResourceReadResult {
   const ResourceReadResult({
     required this.uri,
     required this.mimeType,
-    required this.text,
+    this.text,
+    this.blob,
   });
 
   final String uri;
   final String mimeType;
-  final String text;
+  final String? text;
+  final String? blob;
 
   Map<String, Object?> toJson() {
     return <String, Object?>{
       'contents': <Map<String, Object?>>[
-        <String, Object?>{'uri': uri, 'mimeType': mimeType, 'text': text},
+        <String, Object?>{
+          'uri': uri,
+          'mimeType': mimeType,
+          if (text != null) 'text': text,
+          if (blob != null) 'blob': blob,
+        },
       ],
     };
   }
 }
 
 class ResourceCatalog {
-  const ResourceCatalog({required this.artifactStore});
+  const ResourceCatalog({
+    required this.artifactStore,
+    required this.sessionHealthBuilder,
+    required this.sessionAppStateBuilder,
+  });
 
   final ArtifactStore artifactStore;
+  final SessionHealthPayloadBuilder sessionHealthBuilder;
+  final SessionAppStatePayloadBuilder sessionAppStateBuilder;
 
   Future<List<ResourceDescriptor>> listResources({
     required FlutterHelmConfig config,
@@ -168,7 +185,24 @@ class ResourceCatalog {
       return ResourceReadResult(
         uri: uri,
         mimeType: 'application/json',
-        text: jsonEncode(_sessionHealth(session)),
+        text: jsonEncode(await sessionHealthBuilder(session)),
+      );
+    }
+
+    final appStateMatch = RegExp(r'^app-state://([^/]+)/summary$').firstMatch(uri);
+    if (appStateMatch != null) {
+      if (session == null) {
+        throw FlutterHelmToolError(
+          code: 'SESSION_NOT_FOUND',
+          category: 'runtime',
+          message: 'Unknown session for resource: ${appStateMatch.group(1)}',
+          retryable: false,
+        );
+      }
+      return ResourceReadResult(
+        uri: uri,
+        mimeType: 'application/json',
+        text: jsonEncode(await sessionAppStateBuilder(session)),
       );
     }
 
@@ -233,58 +267,7 @@ class ResourceCatalog {
       mimeType: 'application/json',
       createdAt: session.createdAt,
       lastModified: session.lastSeenAt,
-      size: jsonEncode(_sessionHealth(session)).length,
       sessionId: session.sessionId,
     );
-  }
-
-  Map<String, Object?> _sessionHealth(SessionRecord session) {
-    final issues = <String>[];
-    final guidance = <String>[];
-
-    if (session.stale) {
-      issues.add('session is stale');
-      guidance.add('Re-run or re-attach the app before using runtime or profiling tools.');
-    }
-    if (session.ownership != SessionOwnership.owned) {
-      issues.add('profiling requires an owned session');
-      guidance.add('Use run_app to create an owned session instead of attach_app.');
-    }
-    if (session.state != SessionState.running) {
-      issues.add('session is not running');
-      guidance.add('Profiling tools require a live running session.');
-    }
-    if (!session.vmServiceAvailable) {
-      issues.add('vm service is unavailable');
-      guidance.add('Profiling requires a live VM service connection.');
-    }
-    if (session.mode == 'release') {
-      issues.add('release mode is unsupported for profiling');
-      guidance.add('Use run_app with mode=profile for more reliable performance diagnostics.');
-    } else if (session.mode != 'profile') {
-      guidance.add('Profile mode is recommended for performance measurements.');
-    }
-    if (!session.dtdAvailable) {
-      guidance.add('DTD is not available; FlutterHelm will use vm_service-backed profiling.');
-    }
-
-    return <String, Object?>{
-      'sessionId': session.sessionId,
-      'ready': issues.isEmpty,
-      'issues': issues,
-      'guidance': guidance,
-      'ownership': session.ownership.wireName,
-      'stale': session.stale,
-      'state': session.state.wireName,
-      'currentMode': session.mode,
-      'recommendedMode': 'profile',
-      'vmServiceAvailable': session.vmServiceAvailable,
-      'dtdAvailable': session.dtdAvailable,
-      'backend': 'vm_service',
-      'profileActive': session.profileActive,
-      'nativeBridgeAvailablePlatforms': detectNativeBridgePlatformsSync(
-        session.workspaceRoot,
-      ),
-    };
   }
 }

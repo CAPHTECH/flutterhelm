@@ -29,11 +29,77 @@ class LiveSessionHandle {
   StreamSubscription<String>? stdoutSubscription;
   StreamSubscription<String>? stderrSubscription;
   StreamSubscription<String>? machineSubscription;
+  final Map<String, Completer<Map<String, Object?>>> _pendingMachineRequests =
+      <String, Completer<Map<String, Object?>>>{};
+  int _nextMachineRequestId = 1;
 
   Future<void> dispose() async {
+    final pending = Map<String, Completer<Map<String, Object?>>>.from(
+      _pendingMachineRequests,
+    );
+    _pendingMachineRequests.clear();
+    for (final completer in pending.values) {
+      if (!completer.isCompleted) {
+        completer.completeError(StateError('Session process detached.'));
+      }
+    }
     await stdoutSubscription?.cancel();
     await stderrSubscription?.cancel();
     await machineSubscription?.cancel();
+  }
+
+  Future<Map<String, Object?>> sendMachineRequest(
+    String method,
+    Map<String, Object?> params, {
+    Duration timeout = const Duration(seconds: 20),
+  }) {
+    final managedProcess = process;
+    if (managedProcess == null) {
+      throw StateError('Session does not have a managed process.');
+    }
+    final id = (_nextMachineRequestId++).toString();
+    final completer = Completer<Map<String, Object?>>();
+    _pendingMachineRequests[id] = completer;
+    managedProcess.stdin.writeln(
+      jsonEncode(<Map<String, Object?>>[
+        <String, Object?>{
+          'id': id,
+          'method': method,
+          'params': params,
+        },
+      ]),
+    );
+    return completer.future.timeout(timeout);
+  }
+
+  void completeMachineResponse(Map<String, Object?> message) {
+    final id = message['id']?.toString();
+    if (id == null) {
+      return;
+    }
+    final completer = _pendingMachineRequests.remove(id);
+    if (completer == null) {
+      return;
+    }
+    if (message['error'] != null) {
+      completer.completeError(StateError(jsonEncode(message['error'])));
+      return;
+    }
+    final result = message['result'];
+    if (result is Map<String, Object?>) {
+      completer.complete(result);
+      return;
+    }
+    if (result is Map) {
+      completer.complete(
+        result.map<String, Object?>(
+          (Object? key, Object? value) =>
+              MapEntry<String, Object?>(key.toString(), value),
+        ),
+      );
+      return;
+    }
+    completer.complete(<String, Object?>{});
   }
 }
 

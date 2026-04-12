@@ -10,18 +10,23 @@ import 'package:flutterhelm/sessions/session_store.dart';
 import 'package:flutterhelm/utils/process_runner.dart';
 import 'package:path/path.dart' as p;
 
+typedef AppStateSnapshotBuilder =
+    Future<Map<String, Object?>> Function(SessionRecord session);
+
 class LauncherToolService {
   LauncherToolService({
     required this.processRunner,
     required this.sessionStore,
     required this.artifactStore,
     required this.flutterExecutable,
+    required this.appStateBuilder,
   });
 
   final ProcessRunner processRunner;
   final SessionStore sessionStore;
   final ArtifactStore artifactStore;
   final String flutterExecutable;
+  final AppStateSnapshotBuilder appStateBuilder;
 
   Future<List<Map<String, Object?>>> listDevices() async {
     final flutterDevices = await _flutterDevices();
@@ -132,8 +137,8 @@ class LauncherToolService {
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((String line) async {
-          final event = _tryParseMachineEvent(line);
-          if (event == null) {
+          final message = _tryParseMachineMessage(line);
+          if (message == null) {
             tracker.handleRawLine(line);
             await artifactStore.appendSessionLog(
               sessionId: record.sessionId,
@@ -142,9 +147,16 @@ class LauncherToolService {
             );
             return;
           }
-          await artifactStore.appendSessionMachineEvent(sessionId: record.sessionId, event: event);
-          tracker.handleEvent(event);
-          final appLog = _extractAppLog(event);
+          await artifactStore.appendSessionMachineEvent(
+            sessionId: record.sessionId,
+            event: message,
+          );
+          if (message['event'] == null) {
+            handle.completeMachineResponse(message);
+            return;
+          }
+          tracker.handleEvent(message);
+          final appLog = _extractAppLog(message);
           if (appLog != null && appLog.message.isNotEmpty) {
             await artifactStore.appendSessionLog(
               sessionId: record.sessionId,
@@ -219,10 +231,7 @@ class LauncherToolService {
       vmServiceAvailable: tracker.vmServiceWsUri != null,
       dtdAvailable: tracker.dtdUri != null,
     );
-    await artifactStore.writeSessionAppState(
-      sessionId: updated.sessionId,
-      payload: _sessionAppState(updated),
-    );
+    await _writeAppState(updated);
     return updated;
   }
 
@@ -283,10 +292,7 @@ class LauncherToolService {
         dtdUri: rawDtdUri,
       ),
     );
-    await artifactStore.writeSessionAppState(
-      sessionId: attached.sessionId,
-      payload: _sessionAppState(attached),
-    );
+    await _writeAppState(attached);
     return attached;
   }
 
@@ -341,12 +347,123 @@ class LauncherToolService {
       lastExitCode: exitCode,
       lastExitAt: DateTime.now().toUtc(),
     );
-    await artifactStore.writeSessionAppState(
-      sessionId: updated.sessionId,
-      payload: _sessionAppState(updated),
-    );
+    await _writeAppState(updated);
     await sessionStore.detachLiveHandle(sessionId);
     return updated;
+  }
+
+  Future<Map<String, Object?>> hotReload({required String sessionId}) async {
+    final session = ensureHotReloadAvailable(sessionId: sessionId);
+    await _sendHotOperationRequest(
+      session: session,
+      fullRestart: false,
+      action: 'hot_reload',
+      reason: 'flutterhelm.hot_reload',
+    );
+    final refreshed = sessionStore.replace(
+      session.copyWith(lastSeenAt: DateTime.now().toUtc()),
+    );
+    await _writeAppState(refreshed);
+    return <String, Object?>{
+      'sessionId': refreshed.sessionId,
+      'status': 'completed',
+      'operation': 'hot_reload',
+      'resource': _resourceLink(
+        artifactStore.sessionAppStateUri(refreshed.sessionId),
+        'application/json',
+        'App state summary',
+      ),
+    };
+  }
+
+  Future<Map<String, Object?>> hotRestart({required String sessionId}) async {
+    final session = ensureHotRestartAvailable(sessionId: sessionId);
+    await _sendHotOperationRequest(
+      session: session,
+      fullRestart: true,
+      action: 'hot_restart',
+      reason: 'flutterhelm.hot_restart',
+    );
+    final refreshed = sessionStore.replace(
+      session.copyWith(lastSeenAt: DateTime.now().toUtc()),
+    );
+    await _writeAppState(refreshed);
+    return <String, Object?>{
+      'sessionId': refreshed.sessionId,
+      'status': 'completed',
+      'operation': 'hot_restart',
+      'resource': _resourceLink(
+        artifactStore.sessionAppStateUri(refreshed.sessionId),
+        'application/json',
+        'App state summary',
+      ),
+    };
+  }
+
+  SessionRecord ensureHotReloadAvailable({required String sessionId}) {
+    return _ensureHotOperationAvailable(
+      sessionId: sessionId,
+      code: 'HOT_RELOAD_UNAVAILABLE',
+      action: 'hot reload',
+    );
+  }
+
+  SessionRecord ensureHotRestartAvailable({required String sessionId}) {
+    return _ensureHotOperationAvailable(
+      sessionId: sessionId,
+      code: 'HOT_RESTART_UNAVAILABLE',
+      action: 'hot restart',
+    );
+  }
+
+  SessionRecord _ensureHotOperationAvailable({
+    required String sessionId,
+    required String code,
+    required String action,
+  }) {
+    final session = _requireOwnedRunningSession(
+      sessionId,
+      code: code,
+      action: action,
+    );
+    final handle = sessionStore.liveHandle(sessionId);
+    if (handle == null || handle.process == null || session.appId == null) {
+      throw FlutterHelmToolError(
+        code: code,
+        category: 'runtime',
+        message:
+            '${action[0].toUpperCase()}${action.substring(1)} requires an owned session with a managed flutter run process.',
+        retryable: true,
+        detailsResource: _healthResource(sessionId),
+      );
+    }
+    return session;
+  }
+
+  Future<void> _sendHotOperationRequest({
+    required SessionRecord session,
+    required bool fullRestart,
+    required String action,
+    required String reason,
+  }) async {
+    final handle = sessionStore.liveHandle(session.sessionId);
+    if (handle == null || handle.process == null || session.appId == null) {
+      throw FlutterHelmToolError(
+        code: action == 'hot_reload' ? 'HOT_RELOAD_UNAVAILABLE' : 'HOT_RESTART_UNAVAILABLE',
+        category: 'runtime',
+        message:
+            '$action requires an owned session with a managed flutter run process.',
+        retryable: true,
+        detailsResource: _healthResource(session.sessionId),
+      );
+    }
+    await handle.sendMachineRequest('app.restart', <String, Object?>{
+      'appId': session.appId,
+      'fullRestart': fullRestart,
+      'pause': false,
+      'debounce': true,
+      'reason': reason,
+    });
   }
 
   Future<List<Map<String, Object?>>> _flutterDevices() async {
@@ -520,7 +637,7 @@ class LauncherToolService {
     return int.tryParse((await file.readAsString()).trim());
   }
 
-  Map<String, Object?>? _tryParseMachineEvent(String line) {
+  Map<String, Object?>? _tryParseMachineMessage(String line) {
     try {
       final decoded = jsonDecode(line);
       Object? candidate = decoded;
@@ -561,30 +678,69 @@ class LauncherToolService {
     return '${uri.scheme}://$authority/...';
   }
 
-  Map<String, Object?> _sessionAppState(SessionRecord session) {
+  Future<void> _writeAppState(SessionRecord session) async {
+    final payload = await appStateBuilder(session);
+    payload['nativeBridgeAvailablePlatforms'] = detectNativeBridgePlatformsSync(
+      session.workspaceRoot,
+    );
+    await artifactStore.writeSessionAppState(
+      sessionId: session.sessionId,
+      payload: payload,
+    );
+  }
+
+  SessionRecord _requireOwnedRunningSession(
+    String sessionId, {
+    required String code,
+    required String action,
+  }) {
+    final session = sessionStore.requireById(sessionId);
+    if (session.stale) {
+      throw FlutterHelmToolError(
+        code: 'SESSION_STALE',
+        category: 'runtime',
+        message: 'The target session is stale and cannot perform $action.',
+        retryable: true,
+        detailsResource: _healthResource(session.sessionId),
+      );
+    }
+    if (session.ownership != SessionOwnership.owned) {
+      throw FlutterHelmToolError(
+        code: code,
+        category: 'runtime',
+        message: '$action is only allowed for owned sessions.',
+        retryable: false,
+        detailsResource: _healthResource(session.sessionId),
+      );
+    }
+    if (session.state != SessionState.running) {
+      throw FlutterHelmToolError(
+        code: 'SESSION_NOT_RUNNING',
+        category: 'runtime',
+        message: 'The target session is not attached to a live Flutter process.',
+        retryable: true,
+        detailsResource: _healthResource(session.sessionId),
+      );
+    }
+    return session;
+  }
+
+  Map<String, Object?> _healthResource(String sessionId) {
     return <String, Object?>{
-      'sessionId': session.sessionId,
-      'ownership': session.ownership.wireName,
-      'state': session.state.wireName,
-      'stale': session.stale,
-      'platform': session.platform,
-      'deviceId': session.deviceId,
-      'target': session.target,
-      'mode': session.mode,
-      'pid': session.pid,
-      'profileActive': session.profileActive,
-      'nativeBridgeAvailablePlatforms': detectNativeBridgePlatformsSync(
-        session.workspaceRoot,
-      ),
-      'vmService': <String, Object?>{
-        'available': session.vmServiceAvailable,
-        'maskedUri': session.vmServiceMaskedUri,
-      },
-      'dtd': <String, Object?>{
-        'available': session.dtdAvailable,
-        'maskedUri': session.dtdMaskedUri,
-      },
-      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+      'uri': artifactStore.sessionHealthUri(sessionId),
+      'mimeType': 'application/json',
+    };
+  }
+
+  Map<String, Object?> _resourceLink(
+    String uri,
+    String mimeType,
+    String title,
+  ) {
+    return <String, Object?>{
+      'uri': uri,
+      'mimeType': mimeType,
+      'title': title,
     };
   }
 }

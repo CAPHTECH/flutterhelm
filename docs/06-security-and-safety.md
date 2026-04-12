@@ -70,7 +70,7 @@ logs, env, tool output に含まれる secret を mask する。
 - `capture_timeline`
 - `capture_memory_snapshot`
 
-ただし session が `attached` の場合は自動許可しない。
+ただし session が `attached` の場合は自動許可しない。`hot_restart` は owned session であっても approval replay を要求する。
 
 ## 5. Filesystem Boundary
 
@@ -140,6 +140,16 @@ Flutter 公式 docs にある通り、native code debugging は iOS/macOS なら
 current implementation では `platform_bridge` workflow は既定で有効ですが、許可されるのは read-only handoff bundle 生成だけです。
 native project が見つからない場合も destructive failure にはせず、`status=unavailable` の bundle と次の確認手順を返します。
 
+## 9.1 Runtime Interaction Safety
+
+runtime interaction は current implementation でも **opt-in** です。
+
+- `runtime_interaction` workflow を有効にしない限り `tap_widget`, `enter_text`, `scroll_until_visible`, `hot_reload`, `hot_restart` は露出しない
+- UI action backend は external adapter 前提で、driver 未接続時は capability error を返す
+- screenshot は `runtime_readonly` に残し、driver が無くても iOS simulator なら fallback capture を許可する
+- locator が弱い場合は `SEMANTIC_LOCATOR_NOT_FOUND`, `SEMANTIC_LOCATOR_AMBIGUOUS`, `SEMANTIC_LOCATOR_UNSUPPORTED` を返し、曖昧な自動 fallback はしない
+- `hot_reload` / `hot_restart` は driver ではなく owned session の `flutter run --machine` control channel を使う
+
 ## 10. iOS-specific Safety Note
 
 iOS 14+ では local network permission を許可しないと hot reload や DevTools が動かないことがあります。  
@@ -186,6 +196,7 @@ FlutterHelm は `Info.plist`、Bonjour 設定、session health、recent logs を
 | attached process 誤停止 | 他ツール起動 app の kill | ownership rule |
 | profiling 誤期待 | debug mode で誤った性能判断 | profile mode guidance + session health |
 | attached profiling | attach 済み app に対する重い capture | owned-session only policy |
+| runtime interaction 誤作動 | 弱い semantics で別 widget を操作 | locator contract + explicit capability errors |
 | native debugger 置換誤解 | FlutterHelm だけで iOS/Android deep debug できると誤認 | handoff-only UX + bundle limitations |
 
 ## 14. 結論

@@ -13,6 +13,7 @@ import 'package:flutterhelm/policies/risk.dart';
 import 'package:flutterhelm/policies/roots.dart';
 import 'package:flutterhelm/profiling/tools.dart';
 import 'package:flutterhelm/runtime/tools.dart';
+import 'package:flutterhelm/runtime_interaction/tools.dart';
 import 'package:flutterhelm/server/capabilities.dart';
 import 'package:flutterhelm/server/errors.dart';
 import 'package:flutterhelm/server/registry.dart';
@@ -79,6 +80,7 @@ class FlutterHelmServer {
     required this.sessionStore,
     required this.processRunner,
     required this.workspaceTools,
+    required this.runtimeInteractionTools,
     required this.launcherTools,
     required this.runtimeTools,
     required this.profilingTools,
@@ -101,6 +103,7 @@ class FlutterHelmServer {
   final SessionStore sessionStore;
   final ProcessRunner processRunner;
   final WorkspaceToolService workspaceTools;
+  final RuntimeInteractionToolService runtimeInteractionTools;
   final LauncherToolService launcherTools;
   final RuntimeToolService runtimeTools;
   final ProfilingToolService profilingTools;
@@ -133,6 +136,15 @@ class FlutterHelmServer {
     final approvalStore = await ApprovalStore.create(stateDir: runtimePaths.stateDir);
     final sessionStore = await SessionStore.create(stateDir: runtimePaths.stateDir);
     final processRunner = const ProcessRunner();
+    final runtimeInteractionTools = RuntimeInteractionToolService(
+      sessionStore: sessionStore,
+      artifactStore: artifactStore,
+      workflowEnabled: config.enabledWorkflows.contains('runtime_interaction'),
+      driverEnabled: config.adapters.runtimeDriverEnabled,
+      driverCommand: config.adapters.runtimeDriverCommand,
+      driverArgs: config.adapters.runtimeDriverArgs,
+      driverStartupTimeoutMs: config.adapters.runtimeDriverStartupTimeoutMs,
+    );
 
     return FlutterHelmServer._(
       runtimePaths: runtimePaths,
@@ -143,7 +155,11 @@ class FlutterHelmServer {
       rootPolicy: RootPolicy(allowRootFallback: allowRootFallback),
       toolRegistry: ToolRegistry(),
       artifactStore: artifactStore,
-      resourceCatalog: ResourceCatalog(artifactStore: artifactStore),
+      resourceCatalog: ResourceCatalog(
+        artifactStore: artifactStore,
+        sessionHealthBuilder: runtimeInteractionTools.healthForSession,
+        sessionAppStateBuilder: runtimeInteractionTools.appStateForSession,
+      ),
       sessionStore: sessionStore,
       processRunner: processRunner,
       workspaceTools: WorkspaceToolService(
@@ -151,15 +167,18 @@ class FlutterHelmServer {
         artifactStore: artifactStore,
         flutterExecutable: config.adapters.flutterExecutable,
       ),
+      runtimeInteractionTools: runtimeInteractionTools,
       launcherTools: LauncherToolService(
         processRunner: processRunner,
         sessionStore: sessionStore,
         artifactStore: artifactStore,
         flutterExecutable: config.adapters.flutterExecutable,
+        appStateBuilder: runtimeInteractionTools.appStateForSession,
       ),
       runtimeTools: RuntimeToolService(
         sessionStore: sessionStore,
         artifactStore: artifactStore,
+        appStateBuilder: runtimeInteractionTools.appStateForSession,
       ),
       profilingTools: ProfilingToolService(
         sessionStore: sessionStore,
@@ -452,7 +471,7 @@ class FlutterHelmServer {
         'version': flutterHelmVersion,
       },
       'instructions':
-          'Phase 4 server: use tools for workspace/package/run/test orchestration, vm_service-backed profiling, and native handoff generation; use resources for logs, widget trees, runtime errors, reports, coverage, session health, profiling captures, and native handoff bundles.',
+          'Phase 5 server: use tools for workspace/package/run/test orchestration, vm_service-backed profiling, handoff-only native bridge generation, screenshot capture, and opt-in runtime interaction; use resources for logs, widget trees, runtime errors, reports, coverage, session health, profiling captures, screenshots, and native handoff bundles.',
     };
   }
 
@@ -500,6 +519,10 @@ class FlutterHelmServer {
             'profilingOwnershipPolicy': 'owned_only',
             'platformBridgeMode': 'handoff_only',
             'platformBridgeSupportedPlatforms': const <String>['ios', 'android'],
+            'runtimeInteractionBackend': 'external_adapter',
+            'runtimeInteractionDefaultEnabled': false,
+            'screenshotWorkflow': 'runtime_readonly',
+            'hotOpsOwnershipPolicy': 'owned_only',
             'resources': resources
                 .where(
                   (ResourceDescriptor resource) =>
@@ -943,6 +966,115 @@ class FlutterHelmServer {
             workspaceRoot: currentWorkspaceRoot,
             sessionId: currentSessionId,
             resourceLinks: _resourceLinksFromPayload(<Object?>[appState['resource']]),
+          );
+        case 'capture_screenshot':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot =
+              sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final screenshot = await runtimeInteractionTools.captureScreenshot(
+            sessionId: currentSessionId,
+            format: (arguments['format'] as String?) ?? 'png',
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Screenshot captured for session $currentSessionId.',
+            structuredContent: screenshot,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[screenshot['resource']]),
+          );
+        case 'tap_widget':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot =
+              sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final tapped = await runtimeInteractionTools.tapWidget(
+            sessionId: currentSessionId,
+            locator: _asMap(arguments['locator']),
+            timeoutMs: arguments['timeoutMs'] as int? ?? 3000,
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Widget tap completed for session $currentSessionId.',
+            structuredContent: tapped,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+          );
+        case 'enter_text':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot =
+              sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final entered = await runtimeInteractionTools.enterText(
+            sessionId: currentSessionId,
+            locator: _asMap(arguments['locator']),
+            text: _requiredString(arguments['text'], 'text'),
+            replaceExisting: arguments['replaceExisting'] as bool? ?? true,
+            submit: arguments['submit'] as bool? ?? false,
+            timeoutMs: arguments['timeoutMs'] as int? ?? 3000,
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Text input completed for session $currentSessionId.',
+            structuredContent: entered,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+          );
+        case 'scroll_until_visible':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot =
+              sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final scrolled = await runtimeInteractionTools.scrollUntilVisible(
+            sessionId: currentSessionId,
+            locator: _asMap(arguments['locator']),
+            direction: (arguments['direction'] as String?) ?? 'down',
+            maxScrolls: arguments['maxScrolls'] as int? ?? 8,
+            stepPixels: arguments['stepPixels'] as int?,
+            timeoutMs: arguments['timeoutMs'] as int? ?? 3000,
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary:
+                'Scroll completed for session $currentSessionId after ${scrolled['scrollsUsed']} scroll(s).',
+            structuredContent: scrolled,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+          );
+        case 'hot_reload':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot =
+              sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final reloaded = await launcherTools.hotReload(sessionId: currentSessionId);
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Hot reload completed for session $currentSessionId.',
+            structuredContent: reloaded,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[reloaded['resource']]),
+          );
+        case 'hot_restart':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          currentWorkspaceRoot =
+              sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          launcherTools.ensureHotRestartAvailable(sessionId: currentSessionId);
+          final restartApproval = await _checkApproval(
+            definition: definition,
+            arguments: arguments,
+            workspaceRoot: currentWorkspaceRoot ?? _requireActiveRoot(),
+            reason: 'hot_restart is destructive to in-memory runtime state.',
+          );
+          if (restartApproval.shortCircuit != null) {
+            return restartApproval.shortCircuit!;
+          }
+          currentApprovalRequestId = restartApproval.approvalRequestId;
+          final restarted = await launcherTools.hotRestart(sessionId: currentSessionId);
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Hot restart completed for session $currentSessionId.',
+            structuredContent: restarted,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            approvalRequestId: currentApprovalRequestId,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[restarted['resource']]),
           );
         case 'start_cpu_profile':
           currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');

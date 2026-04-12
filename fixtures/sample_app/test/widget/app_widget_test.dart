@@ -27,4 +27,28 @@ void main() {
     expect(find.text('FlutterHelm Sample'), findsOneWidget);
     expect(find.byType(FloatingActionButton), findsOneWidget);
   });
+
+  testWidgets('interaction scenario exposes tappable and scrollable controls', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      SampleApp(scenario: DemoScenario.interactionDemo),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Interaction Demo'), findsOneWidget);
+    expect(find.text('Tap primary'), findsOneWidget);
+    expect(find.text('Name input'), findsWidgets);
+    expect(find.text('Deep action'), findsNothing);
+
+    final scrollable = find.byType(Scrollable).last;
+    await tester.scrollUntilVisible(
+      find.text('Deep action'),
+      300,
+      scrollable: scrollable,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Deep action'), findsOneWidget);
+  });
 }
