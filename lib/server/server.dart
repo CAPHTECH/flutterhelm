@@ -6,6 +6,7 @@ import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/artifacts/resources.dart';
 import 'package:flutterhelm/config/config.dart';
 import 'package:flutterhelm/launcher/tools.dart';
+import 'package:flutterhelm/policies/approvals.dart';
 import 'package:flutterhelm/policies/audit.dart';
 import 'package:flutterhelm/policies/risk.dart';
 import 'package:flutterhelm/policies/roots.dart';
@@ -20,12 +21,55 @@ import 'package:flutterhelm/utils/process_runner.dart';
 import 'package:flutterhelm/version.dart';
 import 'package:flutterhelm/workspace/tools.dart';
 
+class ToolAuditEntry {
+  const ToolAuditEntry({
+    required this.result,
+    required this.riskClass,
+    this.workspaceRoot,
+    this.sessionId,
+    this.tool,
+    this.errorCode,
+    this.approvalRequestId,
+    this.approved,
+  });
+
+  final String result;
+  final RiskClass riskClass;
+  final String? workspaceRoot;
+  final String? sessionId;
+  final String? tool;
+  final String? errorCode;
+  final String? approvalRequestId;
+  final bool? approved;
+}
+
+class ToolExecutionResult {
+  const ToolExecutionResult({
+    required this.response,
+    required this.audits,
+  });
+
+  final Map<String, Object?> response;
+  final List<ToolAuditEntry> audits;
+}
+
+class ApprovalCheckResult {
+  const ApprovalCheckResult({
+    this.shortCircuit,
+    this.approvalRequestId,
+  });
+
+  final ToolExecutionResult? shortCircuit;
+  final String? approvalRequestId;
+}
+
 class FlutterHelmServer {
   FlutterHelmServer._({
     required this.runtimePaths,
     required this.config,
     required this.stateRepository,
     required this.auditLogger,
+    required this.approvalStore,
     required this.rootPolicy,
     required this.toolRegistry,
     required this.artifactStore,
@@ -45,6 +89,7 @@ class FlutterHelmServer {
   final FlutterHelmConfig config;
   final StateRepository stateRepository;
   final AuditLogger auditLogger;
+  final ApprovalStore approvalStore;
   final RootPolicy rootPolicy;
   final ToolRegistry toolRegistry;
   final ArtifactStore artifactStore;
@@ -79,6 +124,7 @@ class FlutterHelmServer {
     final allowRootFallback =
         allowRootFallbackFlag || config.fallbacks.allowRootFallback;
     final artifactStore = ArtifactStore(stateDir: runtimePaths.stateDir);
+    final approvalStore = await ApprovalStore.create(stateDir: runtimePaths.stateDir);
     final sessionStore = await SessionStore.create(stateDir: runtimePaths.stateDir);
     final processRunner = const ProcessRunner();
 
@@ -87,6 +133,7 @@ class FlutterHelmServer {
       config: config,
       stateRepository: stateRepository,
       auditLogger: AuditLogger(runtimePaths.auditFilePath),
+      approvalStore: approvalStore,
       rootPolicy: RootPolicy(allowRootFallback: allowRootFallback),
       toolRegistry: ToolRegistry(),
       artifactStore: artifactStore,
@@ -95,6 +142,7 @@ class FlutterHelmServer {
       processRunner: processRunner,
       workspaceTools: WorkspaceToolService(
         processRunner: processRunner,
+        artifactStore: artifactStore,
         flutterExecutable: config.adapters.flutterExecutable,
       ),
       launcherTools: LauncherToolService(
@@ -266,19 +314,21 @@ class FlutterHelmServer {
             throw FlutterHelmProtocolError(-32602, 'Unknown tool: $toolName');
           }
           final toolResult = await _executeTool(definition, arguments);
-          _sendResult(id, toolResult);
-          await _recordAudit(
-            method: method,
-            riskClass: definition.risk,
-            result: toolResult['isError'] == true ? 'failure' : 'success',
-            startedAt: startedAt,
-            workspaceRoot: _extractWorkspaceRoot(
-              toolResult['structuredContent'],
-            ),
-            sessionId: _extractSessionId(toolResult['structuredContent']),
-            tool: toolName,
-            errorCode: _extractErrorCode(toolResult['structuredContent']),
-          );
+          _sendResult(id, toolResult.response);
+          for (final audit in toolResult.audits) {
+            await _recordAudit(
+              method: method,
+              riskClass: audit.riskClass,
+              result: audit.result,
+              startedAt: startedAt,
+              workspaceRoot: audit.workspaceRoot,
+              sessionId: audit.sessionId,
+              tool: audit.tool ?? toolName,
+              errorCode: audit.errorCode,
+              approvalRequestId: audit.approvalRequestId,
+              approved: audit.approved,
+            );
+          }
           return;
         case 'resources/list':
           _ensureInitialized();
@@ -339,7 +389,7 @@ class FlutterHelmServer {
       );
     } catch (error, stackTrace) {
       if (error is FlutterHelmToolError) {
-        _sendResult(id, _toolErrorResult(error));
+        _sendResult(id, _toolErrorResponse(error));
         await _recordAudit(
           method: method,
           riskClass: RiskClass.readOnly,
@@ -388,14 +438,18 @@ class FlutterHelmServer {
         'version': flutterHelmVersion,
       },
       'instructions':
-          'Phase 1 server: use tools for workspace/run/test orchestration and resources for logs, widget trees, runtime errors, and reports.',
+          'Phase 2 server: use tools for workspace/package/run/test orchestration and resources for logs, widget trees, runtime errors, reports, and coverage.',
     };
   }
 
-  Future<Map<String, Object?>> _executeTool(
+  Future<ToolExecutionResult> _executeTool(
     ToolDefinition definition,
     Map<String, Object?> arguments,
   ) async {
+    String? currentWorkspaceRoot;
+    String? currentSessionId;
+    String? currentApprovalRequestId;
+
     try {
       switch (definition.name) {
         case 'workspace_discover':
@@ -407,7 +461,8 @@ class FlutterHelmServer {
           }.toList()
             ..sort();
           final workspaces = await workspaceTools.discoverWorkspaces(roots: roots);
-          return _toolSuccessResult(
+          return _toolSuccessExecution(
+            definition: definition,
             summary: '${workspaces.length} workspace(s) discovered.',
             structuredContent: <String, Object?>{'workspaces': workspaces},
           );
@@ -439,7 +494,8 @@ class FlutterHelmServer {
           final summary = _state.activeRoot == null
               ? 'No active root configured.'
               : 'Active root: ${_state.activeRoot}';
-          return _toolSuccessResult(
+          return _toolSuccessExecution(
+            definition: definition,
             summary: summary,
             structuredContent: structuredContent,
             resourceLinks: resources
@@ -461,6 +517,25 @@ class FlutterHelmServer {
             requestedRoot: requestedRoot,
             clientRoots: clientRoots,
           );
+          currentWorkspaceRoot = canonicalRoot;
+          final snapshotBeforeSet = await rootPolicy.buildSnapshot(
+            clientRoots: clientRoots,
+            configuredRoots: config.workspace.roots,
+            activeRoot: _state.activeRoot,
+          );
+          if (snapshotBeforeSet.mode == RootsMode.fallback) {
+            final approval = await _checkApproval(
+              definition: definition,
+              arguments: arguments,
+              workspaceRoot: canonicalRoot,
+              reason:
+                  'Setting the workspace root in fallback mode expands the writable boundary.',
+            );
+            if (approval.shortCircuit != null) {
+              return approval.shortCircuit!;
+            }
+            currentApprovalRequestId = approval.approvalRequestId;
+          }
           _state = await stateRepository.save(
             _state.copyWith(
               activeRoot: canonicalRoot,
@@ -474,7 +549,8 @@ class FlutterHelmServer {
             rootSnapshot: snapshot,
             sessions: sessionStore.listActiveSessions(),
           );
-          return _toolSuccessResult(
+          return _toolSuccessExecution(
+            definition: definition,
             summary: 'Active root set to $canonicalRoot',
             structuredContent: <String, Object?>{
               'workspaceRoot': canonicalRoot,
@@ -483,6 +559,8 @@ class FlutterHelmServer {
               'configuredRoots': snapshot.configuredRoots,
               'activeRoot': _state.activeRoot,
             },
+            workspaceRoot: canonicalRoot,
+            approvalRequestId: currentApprovalRequestId,
             resourceLinks: <Map<String, Object?>>[
               resources
                   .firstWhere(
@@ -493,59 +571,147 @@ class FlutterHelmServer {
             ],
           );
         case 'analyze_project':
-          final workspaceRoot = await _resolveWorkspaceRoot(
+          currentWorkspaceRoot = await _resolveWorkspaceRoot(
             arguments['workspaceRoot'] as String?,
           );
           final analysis = await workspaceTools.analyzeProject(
-            workspaceRoot: workspaceRoot,
+            workspaceRoot: currentWorkspaceRoot,
             fatalInfos: arguments['fatalInfos'] as bool? ?? false,
             fatalWarnings: arguments['fatalWarnings'] as bool? ?? true,
           );
-          return _toolSuccessResult(
-            summary: 'Static analysis completed with ${analysis['issueCount']} issue(s).',
+          return _toolSuccessExecution(
+            definition: definition,
+            summary:
+                'Static analysis completed with ${analysis['issueCount']} issue(s).',
             structuredContent: analysis,
+            workspaceRoot: currentWorkspaceRoot,
           );
         case 'resolve_symbol':
-          final workspaceRoot = await _resolveWorkspaceRoot(
+          currentWorkspaceRoot = await _resolveWorkspaceRoot(
             arguments['workspaceRoot'] as String?,
           );
           final symbol = _requiredString(arguments['symbol'], 'symbol');
           final resolution = await workspaceTools.resolveSymbol(
-            workspaceRoot: workspaceRoot,
+            workspaceRoot: currentWorkspaceRoot,
             symbol: symbol,
           );
           final matches = _asList(resolution['matches']);
-          return _toolSuccessResult(
+          return _toolSuccessExecution(
+            definition: definition,
             summary: matches.isEmpty
                 ? 'No symbol match found for $symbol.'
                 : '${matches.length} symbol match(es) found for $symbol.',
             structuredContent: resolution,
+            workspaceRoot: currentWorkspaceRoot,
           );
         case 'format_files':
-          final workspaceRoot = await _resolveWorkspaceRoot(
+          currentWorkspaceRoot = await _resolveWorkspaceRoot(
             arguments['workspaceRoot'] as String?,
           );
           final paths = _asStringList(arguments['paths']);
           final formatResult = await workspaceTools.formatFiles(
-            workspaceRoot: workspaceRoot,
+            workspaceRoot: currentWorkspaceRoot,
             paths: paths,
             lineLength: arguments['lineLength'] as int?,
           );
-          return _toolSuccessResult(
+          return _toolSuccessExecution(
+            definition: definition,
             summary: 'Formatting completed for ${paths.length} path(s).',
             structuredContent: formatResult,
+            workspaceRoot: currentWorkspaceRoot,
+          );
+        case 'pub_search':
+          final result = await workspaceTools.pubSearch(
+            query: _requiredString(arguments['query'], 'query'),
+            limit: arguments['limit'] as int? ?? 10,
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: '${_asList(result['packages']).length} package candidate(s) found.',
+            structuredContent: result,
+          );
+        case 'dependency_add':
+          currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            arguments['workspaceRoot'] as String?,
+          );
+          final addApproval = await _checkApproval(
+            definition: definition,
+            arguments: arguments,
+            workspaceRoot: currentWorkspaceRoot,
+            reason:
+                'dependency_add modifies pubspec.yaml and runs package resolution.',
+          );
+          if (addApproval.shortCircuit != null) {
+            return addApproval.shortCircuit!;
+          }
+          currentApprovalRequestId = addApproval.approvalRequestId;
+          final packageName = _requiredString(arguments['package'], 'package');
+          final addResult = await workspaceTools.dependencyAdd(
+            workspaceRoot: currentWorkspaceRoot,
+            package: packageName,
+            versionConstraint: arguments['versionConstraint'] as String?,
+            devDependency: arguments['devDependency'] as bool? ?? false,
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Dependency $packageName added.',
+            structuredContent: addResult,
+            workspaceRoot: currentWorkspaceRoot,
+            approvalRequestId: currentApprovalRequestId,
+            resourceLinks: <Map<String, Object?>>[
+              _resourceLink(
+                uri: 'config://workspace/current',
+                mimeType: 'application/json',
+                title: 'Current workspace configuration',
+              ),
+              ..._resourceLinksFromPayload(addResult['resources']),
+            ],
+          );
+        case 'dependency_remove':
+          currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            arguments['workspaceRoot'] as String?,
+          );
+          final removeApproval = await _checkApproval(
+            definition: definition,
+            arguments: arguments,
+            workspaceRoot: currentWorkspaceRoot,
+            reason:
+                'dependency_remove modifies pubspec.yaml and runs package resolution.',
+          );
+          if (removeApproval.shortCircuit != null) {
+            return removeApproval.shortCircuit!;
+          }
+          currentApprovalRequestId = removeApproval.approvalRequestId;
+          final packageName = _requiredString(arguments['package'], 'package');
+          final removeResult = await workspaceTools.dependencyRemove(
+            workspaceRoot: currentWorkspaceRoot,
+            package: packageName,
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Dependency $packageName removed.',
+            structuredContent: removeResult,
+            workspaceRoot: currentWorkspaceRoot,
+            approvalRequestId: currentApprovalRequestId,
+            resourceLinks: <Map<String, Object?>>[
+              _resourceLink(
+                uri: 'config://workspace/current',
+                mimeType: 'application/json',
+                title: 'Current workspace configuration',
+              ),
+              ..._resourceLinksFromPayload(removeResult['resources']),
+            ],
           );
         case 'session_open':
           final clientRoots = await _getClientRoots();
           final workspaceRootArgument = arguments['workspaceRoot'] as String?;
-          final workspaceRoot = workspaceRootArgument != null
+          currentWorkspaceRoot = workspaceRootArgument != null
               ? await rootPolicy.validateWorkspaceRoot(
                   requestedRoot: workspaceRootArgument,
                   clientRoots: clientRoots,
                 )
               : _requireActiveRoot();
-          final target =
-              (arguments['target'] as String?) ?? config.defaults.target;
+          final target = (arguments['target'] as String?) ?? config.defaults.target;
           final flavor = arguments['flavor'] as String?;
           final mode = (arguments['mode'] as String?) ?? config.defaults.mode;
           if (!const <String>{'debug', 'profile', 'release'}.contains(mode)) {
@@ -557,31 +723,34 @@ class FlutterHelmServer {
             );
           }
           final session = sessionStore.createContextSession(
-            workspaceRoot: workspaceRoot,
+            workspaceRoot: currentWorkspaceRoot,
             target: target,
             mode: mode,
             flavor: flavor,
           );
-          final resources = await resourceCatalog
-              .listResources(
-                config: config,
-                state: _state,
-                rootSnapshot: await _currentRootSnapshot(),
-                sessions: sessionStore.listActiveSessions(),
-              );
-          final descriptor = resources
-              .firstWhere(
-                (ResourceDescriptor resource) =>
-                    resource.uri == 'session://${session.sessionId}/summary',
-              );
-          return _toolSuccessResult(
+          currentSessionId = session.sessionId;
+          final resources = await resourceCatalog.listResources(
+            config: config,
+            state: _state,
+            rootSnapshot: await _currentRootSnapshot(),
+            sessions: sessionStore.listActiveSessions(),
+          );
+          final descriptor = resources.firstWhere(
+            (ResourceDescriptor resource) =>
+                resource.uri == 'session://${session.sessionId}/summary',
+          );
+          return _toolSuccessExecution(
+            definition: definition,
             summary: 'Opened session ${session.sessionId}.',
             structuredContent: session.toJson(),
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: session.sessionId,
             resourceLinks: <Map<String, Object?>>[descriptor.toResourceLink()],
           );
         case 'session_list':
           final sessions = sessionStore.listActiveSessions();
-          return _toolSuccessResult(
+          return _toolSuccessExecution(
+            definition: definition,
             summary: '${sessions.length} active session(s).',
             structuredContent: <String, Object?>{
               'sessions': sessions
@@ -591,12 +760,13 @@ class FlutterHelmServer {
           );
         case 'device_list':
           final devices = await launcherTools.listDevices();
-          return _toolSuccessResult(
+          return _toolSuccessExecution(
+            definition: definition,
             summary: '${devices.length} device(s) available.',
             structuredContent: <String, Object?>{'devices': devices},
           );
         case 'run_app':
-          final workspaceRoot = await _resolveWorkspaceRoot(
+          currentWorkspaceRoot = await _resolveWorkspaceRoot(
             arguments['workspaceRoot'] as String?,
           );
           final target = (arguments['target'] as String?) ?? config.defaults.target;
@@ -604,7 +774,7 @@ class FlutterHelmServer {
           final mode = (arguments['mode'] as String?) ?? config.defaults.mode;
           final platform = _requiredString(arguments['platform'], 'platform');
           final session = await launcherTools.runApp(
-            workspaceRoot: workspaceRoot,
+            workspaceRoot: currentWorkspaceRoot,
             target: target,
             platform: platform,
             mode: mode,
@@ -613,7 +783,9 @@ class FlutterHelmServer {
             deviceId: arguments['deviceId'] as String?,
             sessionId: arguments['sessionId'] as String?,
           );
-          return _toolSuccessResult(
+          currentSessionId = session.sessionId;
+          return _toolSuccessExecution(
+            definition: definition,
             summary: 'App session ${session.sessionId} is ${session.state.wireName}.',
             structuredContent: <String, Object?>{
               ...session.toJson(),
@@ -630,6 +802,8 @@ class FlutterHelmServer {
                 },
               ],
             },
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: session.sessionId,
             resourceLinks: <Map<String, Object?>>[
               _resourceLink(
                 uri: 'session://${session.sessionId}/summary',
@@ -644,11 +818,11 @@ class FlutterHelmServer {
             ],
           );
         case 'attach_app':
-          final workspaceRoot = await _resolveWorkspaceRoot(
+          currentWorkspaceRoot = await _resolveWorkspaceRoot(
             arguments['workspaceRoot'] as String?,
           );
           final attached = await launcherTools.attachApp(
-            workspaceRoot: workspaceRoot,
+            workspaceRoot: currentWorkspaceRoot,
             platform: _requiredString(arguments['platform'], 'platform'),
             target: (arguments['target'] as String?) ?? config.defaults.target,
             mode: (arguments['mode'] as String?) ?? config.defaults.mode,
@@ -658,9 +832,13 @@ class FlutterHelmServer {
             debugUrl: arguments['debugUrl'] as String?,
             appId: arguments['appId'] as String?,
           );
-          return _toolSuccessResult(
+          currentSessionId = attached.sessionId;
+          return _toolSuccessExecution(
+            definition: definition,
             summary: 'Attached session ${attached.sessionId} is ready.',
             structuredContent: attached.toJson(),
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: attached.sessionId,
             resourceLinks: <Map<String, Object?>>[
               _resourceLink(
                 uri: 'session://${attached.sessionId}/summary',
@@ -670,12 +848,15 @@ class FlutterHelmServer {
             ],
           );
         case 'stop_app':
-          final stopped = await launcherTools.stopApp(
-            sessionId: _requiredString(arguments['sessionId'], 'sessionId'),
-          );
-          return _toolSuccessResult(
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          final stopped = await launcherTools.stopApp(sessionId: currentSessionId);
+          currentWorkspaceRoot = stopped.workspaceRoot;
+          return _toolSuccessExecution(
+            definition: definition,
             summary: 'Session ${stopped.sessionId} is ${stopped.state.wireName}.',
             structuredContent: stopped.toJson(),
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: stopped.sessionId,
             resourceLinks: <Map<String, Object?>>[
               _resourceLink(
                 uri: 'session://${stopped.sessionId}/summary',
@@ -685,84 +866,162 @@ class FlutterHelmServer {
             ],
           );
         case 'get_logs':
-          final result = await runtimeTools.getLogs(
-            sessionId: _requiredString(arguments['sessionId'], 'sessionId'),
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          final logs = await runtimeTools.getLogs(
+            sessionId: currentSessionId,
             stream: (arguments['stream'] as String?) ?? 'both',
             tailLines: arguments['tailLines'] as int? ?? 200,
           );
-          return _toolSuccessResult(
-            summary: 'Retrieved ${result['stream']} logs.',
-            structuredContent: result,
-            resourceLinks: _resourceLinksFromPayload(result['resources']),
+          currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Retrieved ${logs['stream']} logs.',
+            structuredContent: logs,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(logs['resources']),
           );
         case 'get_runtime_errors':
-          final result = await runtimeTools.getRuntimeErrors(
-            sessionId: _requiredString(arguments['sessionId'], 'sessionId'),
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          final runtimeErrors = await runtimeTools.getRuntimeErrors(
+            sessionId: currentSessionId,
           );
-          return _toolSuccessResult(
-            summary: '${result['count']} runtime error(s) found.',
-            structuredContent: result,
-            resourceLinks: _resourceLinksFromPayload(<Object?>[result['resource']]),
+          currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: '${runtimeErrors['count']} runtime error(s) found.',
+            structuredContent: runtimeErrors,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[runtimeErrors['resource']]),
           );
         case 'get_widget_tree':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
           final depth = arguments['depth'] as int? ?? 3;
-          final result = await runtimeTools.getWidgetTree(
-            sessionId: _requiredString(arguments['sessionId'], 'sessionId'),
+          final widgetTree = await runtimeTools.getWidgetTree(
+            sessionId: currentSessionId,
             depth: depth,
             includeProperties: arguments['includeProperties'] as bool? ?? false,
           );
-          return _toolSuccessResult(
-            summary: 'Captured widget tree for session ${result['sessionId']}.',
-            structuredContent: result,
-            resourceLinks: _resourceLinksFromPayload(<Object?>[result['resource']]),
+          currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Captured widget tree for session ${widgetTree['sessionId']}.',
+            structuredContent: widgetTree,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[widgetTree['resource']]),
           );
         case 'get_app_state_summary':
-          final result = await runtimeTools.getAppStateSummary(
-            sessionId: _requiredString(arguments['sessionId'], 'sessionId'),
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          final appState = await runtimeTools.getAppStateSummary(
+            sessionId: currentSessionId,
           );
-          return _toolSuccessResult(
+          currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          return _toolSuccessExecution(
+            definition: definition,
             summary: 'App state summary retrieved.',
-            structuredContent: result,
-            resourceLinks: _resourceLinksFromPayload(<Object?>[result['resource']]),
+            structuredContent: appState,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(<Object?>[appState['resource']]),
           );
         case 'run_unit_tests':
-          final workspaceRoot = await _resolveWorkspaceRoot(
+          currentWorkspaceRoot = await _resolveWorkspaceRoot(
             arguments['workspaceRoot'] as String?,
           );
-          final result = await testTools.runUnitTests(
-            workspaceRoot: workspaceRoot,
+          final unitTests = await testTools.runUnitTests(
+            workspaceRoot: currentWorkspaceRoot,
             targets: _asStringList(arguments['targets']),
             coverage: arguments['coverage'] as bool? ?? false,
           );
-          return _toolSuccessResult(
-            summary: 'Unit tests ${result['status']}.',
-            structuredContent: result,
-            resourceLinks: _resourceLinksFromPayload(result['resources']),
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Unit tests ${unitTests['status']}.',
+            structuredContent: unitTests,
+            workspaceRoot: currentWorkspaceRoot,
+            resourceLinks: _resourceLinksFromPayload(unitTests['resources']),
           );
         case 'run_widget_tests':
-          final workspaceRoot = await _resolveWorkspaceRoot(
+          currentWorkspaceRoot = await _resolveWorkspaceRoot(
             arguments['workspaceRoot'] as String?,
           );
-          final result = await testTools.runWidgetTests(
-            workspaceRoot: workspaceRoot,
+          final widgetTests = await testTools.runWidgetTests(
+            workspaceRoot: currentWorkspaceRoot,
             targets: _asStringList(arguments['targets']),
             coverage: arguments['coverage'] as bool? ?? false,
           );
-          return _toolSuccessResult(
-            summary: 'Widget tests ${result['status']}.',
-            structuredContent: result,
-            resourceLinks: _resourceLinksFromPayload(result['resources']),
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Widget tests ${widgetTests['status']}.',
+            structuredContent: widgetTests,
+            workspaceRoot: currentWorkspaceRoot,
+            resourceLinks: _resourceLinksFromPayload(widgetTests['resources']),
+          );
+        case 'run_integration_tests':
+          currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            arguments['workspaceRoot'] as String?,
+          );
+          final platform = _requiredString(arguments['platform'], 'platform');
+          final target = _requiredString(arguments['target'], 'target');
+          final deviceId = await launcherTools.resolveLaunchDeviceId(
+            platform: platform,
+            deviceId: arguments['deviceId'] as String?,
+          );
+          if (platform == 'ios') {
+            await launcherTools.ensureIosSimulatorBooted(deviceId);
+          }
+          final integrationTests = await testTools.runIntegrationTests(
+            workspaceRoot: currentWorkspaceRoot,
+            targets: <String>[target],
+            platform: platform,
+            deviceId: deviceId,
+            flavor: arguments['flavor'] as String?,
+            coverage: arguments['coverage'] as bool? ?? false,
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Integration tests ${integrationTests['status']}.',
+            structuredContent: integrationTests,
+            workspaceRoot: currentWorkspaceRoot,
+            resourceLinks: _resourceLinksFromPayload(integrationTests['resources']),
+          );
+        case 'get_test_results':
+          final testResults = await testTools.getTestResults(
+            runId: _requiredString(arguments['runId'], 'runId'),
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Test results loaded for ${testResults['runId']}.',
+            structuredContent: testResults,
+            resourceLinks: _resourceLinksFromPayload(testResults['resources']),
+          );
+        case 'collect_coverage':
+          final coverage = await testTools.collectCoverage(
+            runId: _requiredString(arguments['runId'], 'runId'),
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Coverage artifacts loaded for ${coverage['runId']}.',
+            structuredContent: coverage,
+            resourceLinks: _resourceLinksFromPayload(coverage['resources']),
           );
         default:
           throw FlutterHelmToolError(
             code: 'TOOL_NOT_IMPLEMENTED',
             category: 'internal',
-            message: 'Tool not implemented in Phase 1: ${definition.name}',
+            message: 'Tool not implemented in Phase 2: ${definition.name}',
             retryable: false,
           );
       }
     } on FlutterHelmToolError catch (error) {
-      return _toolErrorResult(error);
+      return _toolErrorExecution(
+        definition: definition,
+        error: error,
+        workspaceRoot: currentWorkspaceRoot,
+        sessionId: currentSessionId,
+        approvalRequestId: currentApprovalRequestId,
+      );
     }
   }
 
@@ -927,6 +1186,8 @@ class FlutterHelmServer {
     String? sessionId,
     String? tool,
     String? errorCode,
+    String? approvalRequestId,
+    bool? approved,
   }) async {
     await auditLogger.log(
       AuditEvent(
@@ -937,30 +1198,220 @@ class FlutterHelmServer {
         workspaceRoot: workspaceRoot,
         sessionId: sessionId,
         tool: tool,
-        approved: result == 'success',
+        approved: approved ?? result == 'success',
         result: result,
         durationMs: DateTime.now().toUtc().difference(startedAt).inMilliseconds,
         errorCode: errorCode,
+        approvalRequestId: approvalRequestId,
       ),
     );
   }
 
-  Map<String, Object?> _toolSuccessResult({
+  ToolExecutionResult _toolSuccessExecution({
+    required ToolDefinition definition,
     required String summary,
     required Map<String, Object?> structuredContent,
+    String? workspaceRoot,
+    String? sessionId,
+    String? approvalRequestId,
     List<Map<String, Object?>> resourceLinks = const <Map<String, Object?>>[],
   }) {
-    return <String, Object?>{
-      'content': <Map<String, Object?>>[
-        <String, Object?>{'type': 'text', 'text': summary},
-        ...resourceLinks,
+    return ToolExecutionResult(
+      response: <String, Object?>{
+        'content': <Map<String, Object?>>[
+          <String, Object?>{'type': 'text', 'text': summary},
+          ...resourceLinks,
+        ],
+        'structuredContent': structuredContent,
+        'isError': false,
+      },
+      audits: <ToolAuditEntry>[
+        if (approvalRequestId != null)
+          ToolAuditEntry(
+            result: 'approved',
+            riskClass: definition.risk,
+            workspaceRoot: workspaceRoot,
+            sessionId: sessionId,
+            tool: definition.name,
+            approvalRequestId: approvalRequestId,
+            approved: true,
+          ),
+        ToolAuditEntry(
+          result: 'success',
+          riskClass: definition.risk,
+          workspaceRoot: workspaceRoot,
+          sessionId: sessionId,
+          tool: definition.name,
+          approvalRequestId: approvalRequestId,
+          approved: approvalRequestId != null,
+        ),
       ],
-      'structuredContent': structuredContent,
-      'isError': false,
-    };
+    );
   }
 
-  Map<String, Object?> _toolErrorResult(FlutterHelmToolError error) {
+  ToolExecutionResult _toolErrorExecution({
+    required ToolDefinition definition,
+    required FlutterHelmToolError error,
+    String? workspaceRoot,
+    String? sessionId,
+    String? approvalRequestId,
+  }) {
+    return ToolExecutionResult(
+      response: <String, Object?>{
+        'content': <Map<String, Object?>>[
+          <String, Object?>{'type': 'text', 'text': error.message},
+        ],
+        'structuredContent': <String, Object?>{'error': error.toJson()},
+        'isError': true,
+      },
+      audits: <ToolAuditEntry>[
+        if (approvalRequestId != null)
+          ToolAuditEntry(
+            result: 'approved',
+            riskClass: definition.risk,
+            workspaceRoot: workspaceRoot,
+            sessionId: sessionId,
+            tool: definition.name,
+            approvalRequestId: approvalRequestId,
+            approved: true,
+          ),
+        ToolAuditEntry(
+          result: 'failure',
+          riskClass: definition.risk,
+          workspaceRoot: workspaceRoot,
+          sessionId: sessionId,
+          tool: definition.name,
+          errorCode: error.code,
+          approvalRequestId: approvalRequestId,
+          approved: approvalRequestId != null,
+        ),
+      ],
+    );
+  }
+
+  Future<ApprovalCheckResult> _checkApproval({
+    required ToolDefinition definition,
+    required Map<String, Object?> arguments,
+    required String workspaceRoot,
+    required String reason,
+  }) async {
+    final normalizedArguments = _normalizedApprovalArguments(
+      arguments,
+      workspaceRoot: workspaceRoot,
+    );
+    final argumentsHash = stableApprovalArgumentsHash(normalizedArguments);
+    final approvalToken = arguments['approvalToken'] as String?;
+    if (approvalToken == null || approvalToken.isEmpty) {
+      final request = await approvalStore.createRequest(
+        tool: definition.name,
+        argumentsHash: argumentsHash,
+        workspaceRoot: workspaceRoot,
+        riskClass: definition.risk.wireName,
+      );
+      return ApprovalCheckResult(
+        shortCircuit: _approvalRequiredExecution(
+          definition: definition,
+          workspaceRoot: workspaceRoot,
+          reason: reason,
+          approvalRequestId: request.approvalRequestId,
+        ),
+      );
+    }
+
+    final consumeResult = await approvalStore.consume(
+      approvalToken: approvalToken,
+      tool: definition.name,
+      argumentsHash: argumentsHash,
+      workspaceRoot: workspaceRoot,
+    );
+    switch (consumeResult.status) {
+      case ApprovalConsumeStatus.approved:
+        return ApprovalCheckResult(approvalRequestId: approvalToken);
+      case ApprovalConsumeStatus.expired:
+        return ApprovalCheckResult(
+          shortCircuit: ToolExecutionResult(
+            response: _toolErrorResponse(
+              FlutterHelmToolError(
+                code: 'APPROVAL_TOKEN_EXPIRED',
+                category: 'approval',
+                message: 'The approval token has expired. Retry the tool to request a new token.',
+                retryable: true,
+              ),
+            ),
+            audits: <ToolAuditEntry>[
+              ToolAuditEntry(
+                result: 'expired',
+                riskClass: definition.risk,
+                workspaceRoot: workspaceRoot,
+                tool: definition.name,
+                errorCode: 'APPROVAL_TOKEN_EXPIRED',
+                approvalRequestId: approvalToken,
+                approved: false,
+              ),
+            ],
+          ),
+        );
+      case ApprovalConsumeStatus.rejected:
+        return ApprovalCheckResult(
+          shortCircuit: ToolExecutionResult(
+            response: _toolErrorResponse(
+              FlutterHelmToolError(
+                code: 'APPROVAL_TOKEN_REJECTED',
+                category: 'approval',
+                message:
+                    'The approval token is invalid for this tool or argument set.',
+                retryable: true,
+              ),
+            ),
+            audits: <ToolAuditEntry>[
+              ToolAuditEntry(
+                result: 'rejected_token',
+                riskClass: definition.risk,
+                workspaceRoot: workspaceRoot,
+                tool: definition.name,
+                errorCode: 'APPROVAL_TOKEN_REJECTED',
+                approvalRequestId: approvalToken,
+                approved: false,
+              ),
+            ],
+          ),
+        );
+    }
+  }
+
+  ToolExecutionResult _approvalRequiredExecution({
+    required ToolDefinition definition,
+    required String workspaceRoot,
+    required String reason,
+    required String approvalRequestId,
+  }) {
+    return ToolExecutionResult(
+      response: <String, Object?>{
+        'content': <Map<String, Object?>>[
+          <String, Object?>{'type': 'text', 'text': reason},
+        ],
+        'structuredContent': <String, Object?>{
+          'status': 'approval_required',
+          'risk': definition.risk.wireName,
+          'reason': reason,
+          'approvalRequestId': approvalRequestId,
+        },
+        'isError': false,
+      },
+      audits: <ToolAuditEntry>[
+        ToolAuditEntry(
+          result: 'approval_required',
+          riskClass: definition.risk,
+          workspaceRoot: workspaceRoot,
+          tool: definition.name,
+          approvalRequestId: approvalRequestId,
+          approved: false,
+        ),
+      ],
+    );
+  }
+
+  Map<String, Object?> _toolErrorResponse(FlutterHelmToolError error) {
     return <String, Object?>{
       'content': <Map<String, Object?>>[
         <String, Object?>{'type': 'text', 'text': error.message},
@@ -968,6 +1419,21 @@ class FlutterHelmServer {
       'structuredContent': <String, Object?>{'error': error.toJson()},
       'isError': true,
     };
+  }
+
+  Map<String, Object?> _normalizedApprovalArguments(
+    Map<String, Object?> arguments, {
+    required String workspaceRoot,
+  }) {
+    final normalized = <String, Object?>{};
+    for (final entry in arguments.entries) {
+      if (entry.key == 'approvalToken') {
+        continue;
+      }
+      normalized[entry.key] = entry.value;
+    }
+    normalized['workspaceRoot'] = workspaceRoot;
+    return normalized;
   }
 
   void _sendResult(Object id, Map<String, Object?> result) {
@@ -1028,22 +1494,6 @@ String _requiredString(Object? value, String fieldName) {
     return value;
   }
   throw FlutterHelmProtocolError(-32602, 'Missing required field: $fieldName');
-}
-
-String? _extractWorkspaceRoot(Object? structuredContent) {
-  final content = _asMap(structuredContent);
-  return content['workspaceRoot'] as String? ??
-      content['activeRoot'] as String?;
-}
-
-String? _extractSessionId(Object? structuredContent) {
-  final content = _asMap(structuredContent);
-  return content['sessionId'] as String?;
-}
-
-String? _extractErrorCode(Object? structuredContent) {
-  final content = _asMap(structuredContent);
-  return _asMap(content['error'])['code'] as String?;
 }
 
 String? _sessionIdFromUri(String uri) {

@@ -98,6 +98,7 @@ class ResourceCatalog {
       resources.addAll(await artifactStore.listSessionResources(session.sessionId));
     }
     resources.addAll(await artifactStore.listTestRunResources());
+    resources.addAll(await artifactStore.listMutationResources());
     resources.sort((left, right) => left.uri.compareTo(right.uri));
     return resources;
   }

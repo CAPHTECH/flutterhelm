@@ -103,6 +103,7 @@ List<ToolDefinition> _buildDefinitions() {
         'type': 'object',
         'properties': <String, Object?>{
           'workspaceRoot': <String, Object?>{'type': 'string'},
+          'approvalToken': <String, Object?>{'type': 'string'},
         },
         'required': <String>['workspaceRoot'],
         'additionalProperties': false,
@@ -177,7 +178,16 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Search packages on pub.dev.',
       workflow: 'workspace',
       risk: RiskClass.readOnlyNetwork,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'query': <String, Object?>{'type': 'string'},
+          'limit': <String, Object?>{'type': 'integer', 'minimum': 1, 'maximum': 20},
+        },
+        'required': <String>['query'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'dependency_add',
@@ -185,7 +195,19 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Add a dependency to pubspec.yaml.',
       workflow: 'workspace',
       risk: RiskClass.projectMutation,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'workspaceRoot': <String, Object?>{'type': 'string'},
+          'package': <String, Object?>{'type': 'string'},
+          'versionConstraint': <String, Object?>{'type': 'string'},
+          'devDependency': <String, Object?>{'type': 'boolean'},
+          'approvalToken': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['package'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'dependency_remove',
@@ -193,7 +215,17 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Remove a dependency from pubspec.yaml.',
       workflow: 'workspace',
       risk: RiskClass.projectMutation,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'workspaceRoot': <String, Object?>{'type': 'string'},
+          'package': <String, Object?>{'type': 'string'},
+          'approvalToken': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['package'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'session_open',
@@ -472,7 +504,20 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Run integration tests.',
       workflow: 'tests',
       risk: RiskClass.testExecution,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'workspaceRoot': <String, Object?>{'type': 'string'},
+          'platform': <String, Object?>{'type': 'string'},
+          'deviceId': <String, Object?>{'type': 'string'},
+          'target': <String, Object?>{'type': 'string'},
+          'flavor': <String, Object?>{'type': 'string'},
+          'coverage': <String, Object?>{'type': 'boolean', 'default': false},
+        },
+        'required': <String>['platform', 'target'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'get_test_results',
@@ -480,7 +525,15 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Read test results.',
       workflow: 'tests',
       risk: RiskClass.readOnly,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'runId': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['runId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'collect_coverage',
@@ -488,7 +541,15 @@ List<ToolDefinition> _buildDefinitions() {
       description: 'Collect coverage artifacts.',
       workflow: 'tests',
       risk: RiskClass.readOnly,
-      implemented: false,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'runId': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['runId'],
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'tap_widget',

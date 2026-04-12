@@ -15,6 +15,8 @@ class ArtifactStore {
 
   String testRunArtifactsDir(String runId) => p.join(_artifactsDir, 'test-runs', runId);
 
+  String mutationArtifactsDir(String changeId) => p.join(_artifactsDir, 'mutations', changeId);
+
   String sessionLogUri(String sessionId, String stream) => 'log://$sessionId/$stream';
 
   String sessionRuntimeErrorsUri(String sessionId) => 'runtime-errors://$sessionId/current';
@@ -29,6 +31,12 @@ class ArtifactStore {
   String testDetailsUri(String runId) => 'test-report://$runId/details';
 
   String testLogUri(String runId, String stream) => 'log://$runId/$stream';
+
+  String mutationLogUri(String changeId, String stream) => 'log://$changeId/$stream';
+
+  String coverageSummaryUri(String runId) => 'coverage://$runId/summary';
+
+  String coverageLcovUri(String runId) => 'coverage://$runId/lcov';
 
   Future<void> appendSessionLog({
     required String sessionId,
@@ -102,6 +110,71 @@ class ArtifactStore {
     final file = File(p.join(testRunArtifactsDir(runId), '$stream.log'));
     await file.parent.create(recursive: true);
     await file.writeAsString('$line\n', mode: FileMode.append);
+  }
+
+  Future<void> writeCoverageSummary({
+    required String runId,
+    required Map<String, Object?> payload,
+  }) {
+    return _writeJson(
+      File(p.join(testRunArtifactsDir(runId), 'coverage-summary.json')),
+      payload,
+    );
+  }
+
+  Future<void> writeCoverageLcov({
+    required String runId,
+    required String contents,
+  }) async {
+    final file = File(p.join(testRunArtifactsDir(runId), 'coverage.lcov'));
+    await file.parent.create(recursive: true);
+    await file.writeAsString(contents);
+  }
+
+  Future<void> writeMutationSnapshot({
+    required String changeId,
+    required String label,
+    required String contents,
+  }) async {
+    final file = File(p.join(mutationArtifactsDir(changeId), '$label.pubspec.yaml'));
+    await file.parent.create(recursive: true);
+    await file.writeAsString(contents);
+  }
+
+  Future<void> writeMutationSummary({
+    required String changeId,
+    required Map<String, Object?> payload,
+  }) {
+    return _writeJson(
+      File(p.join(mutationArtifactsDir(changeId), 'summary.json')),
+      payload,
+    );
+  }
+
+  Future<void> appendMutationLog({
+    required String changeId,
+    required String stream,
+    required String line,
+  }) async {
+    final file = File(p.join(mutationArtifactsDir(changeId), '$stream.log'));
+    await file.parent.create(recursive: true);
+    await file.writeAsString('$line\n', mode: FileMode.append);
+  }
+
+  Future<Map<String, Object?>?> readTestRunSummary(String runId) {
+    return _readJson(File(p.join(testRunArtifactsDir(runId), 'summary.json')));
+  }
+
+  Future<Map<String, Object?>?> readTestRunDetails(String runId) {
+    return _readJson(File(p.join(testRunArtifactsDir(runId), 'details.json')));
+  }
+
+  Future<Map<String, Object?>?> readCoverageSummary(String runId) {
+    return _readJson(File(p.join(testRunArtifactsDir(runId), 'coverage-summary.json')));
+  }
+
+  Future<String?> readCoverageLcov(String runId) {
+    return _readText(File(p.join(testRunArtifactsDir(runId), 'coverage.lcov')));
   }
 
   Future<ResourceReadResult?> readStoredResource(String uri) async {
@@ -247,6 +320,66 @@ class ArtifactStore {
           mimeType: 'text/plain',
         ));
       }
+      final coverageSummary = File(p.join(entity.path, 'coverage-summary.json'));
+      if (await coverageSummary.exists()) {
+        resources.add(await _descriptorForFile(
+          file: coverageSummary,
+          uri: coverageSummaryUri(runId),
+          name: 'coverage.summary.$runId',
+          title: 'Coverage summary $runId',
+          description: 'Coverage summary for the test run.',
+          mimeType: 'application/json',
+        ));
+      }
+      final coverageLcov = File(p.join(entity.path, 'coverage.lcov'));
+      if (await coverageLcov.exists()) {
+        resources.add(await _descriptorForFile(
+          file: coverageLcov,
+          uri: coverageLcovUri(runId),
+          name: 'coverage.lcov.$runId',
+          title: 'Coverage LCOV $runId',
+          description: 'Raw LCOV output for the test run.',
+          mimeType: 'text/plain',
+        ));
+      }
+    }
+    resources.sort((left, right) => left.uri.compareTo(right.uri));
+    return resources;
+  }
+
+  Future<List<ResourceDescriptor>> listMutationResources() async {
+    final dir = Directory(p.join(_artifactsDir, 'mutations'));
+    if (!await dir.exists()) {
+      return const <ResourceDescriptor>[];
+    }
+    final resources = <ResourceDescriptor>[];
+    await for (final entity in dir.list()) {
+      if (entity is! Directory) {
+        continue;
+      }
+      final changeId = p.basename(entity.path);
+      final stdout = File(p.join(entity.path, 'stdout.log'));
+      if (await stdout.exists()) {
+        resources.add(await _descriptorForFile(
+          file: stdout,
+          uri: mutationLogUri(changeId, 'stdout'),
+          name: 'mutation.stdout.$changeId',
+          title: 'Mutation stdout $changeId',
+          description: 'stdout from a dependency mutation command.',
+          mimeType: 'text/plain',
+        ));
+      }
+      final stderr = File(p.join(entity.path, 'stderr.log'));
+      if (await stderr.exists()) {
+        resources.add(await _descriptorForFile(
+          file: stderr,
+          uri: mutationLogUri(changeId, 'stderr'),
+          name: 'mutation.stderr.$changeId',
+          title: 'Mutation stderr $changeId',
+          description: 'stderr from a dependency mutation command.',
+          mimeType: 'text/plain',
+        ));
+      }
     }
     resources.sort((left, right) => left.uri.compareTo(right.uri));
     return resources;
@@ -255,6 +388,29 @@ class ArtifactStore {
   Future<void> _writeJson(File file, Map<String, Object?> payload) async {
     await file.parent.create(recursive: true);
     await file.writeAsString(const JsonEncoder.withIndent('  ').convert(payload));
+  }
+
+  Future<Map<String, Object?>?> _readJson(File file) async {
+    if (!await file.exists()) {
+      return null;
+    }
+    final decoded = jsonDecode(await file.readAsString());
+    if (decoded is Map<String, Object?>) {
+      return decoded;
+    }
+    if (decoded is Map) {
+      return decoded.map<String, Object?>(
+        (Object? key, Object? value) => MapEntry<String, Object?>(key.toString(), value),
+      );
+    }
+    return null;
+  }
+
+  Future<String?> _readText(File file) async {
+    if (!await file.exists()) {
+      return null;
+    }
+    return file.readAsString();
   }
 
   Future<ResourceDescriptor> _descriptorForFile({
@@ -287,7 +443,13 @@ class ArtifactStore {
         return _ResolvedStoredFile(path: sessionFile.path, mimeType: 'text/plain');
       }
       final testFile = File(p.join(testRunArtifactsDir(id), '$stream.log'));
-      return _ResolvedStoredFile(path: testFile.path, mimeType: 'text/plain');
+      if (testFile.existsSync()) {
+        return _ResolvedStoredFile(path: testFile.path, mimeType: 'text/plain');
+      }
+      return _ResolvedStoredFile(
+        path: p.join(mutationArtifactsDir(id), '$stream.log'),
+        mimeType: 'text/plain',
+      );
     }
 
     final runtimeMatch = RegExp(r'^runtime-errors://([^/]+)/current$').firstMatch(uri);
@@ -320,6 +482,19 @@ class ArtifactStore {
       return _ResolvedStoredFile(
         path: p.join(testRunArtifactsDir(testMatch.group(1)!), '${testMatch.group(2)}.json'),
         mimeType: 'application/json',
+      );
+    }
+
+    final coverageMatch = RegExp(r'^coverage://([^/]+)/(summary|lcov)$').firstMatch(uri);
+    if (coverageMatch != null) {
+      final runId = coverageMatch.group(1)!;
+      final kind = coverageMatch.group(2)!;
+      return _ResolvedStoredFile(
+        path: p.join(
+          testRunArtifactsDir(runId),
+          kind == 'summary' ? 'coverage-summary.json' : 'coverage.lcov',
+        ),
+        mimeType: kind == 'summary' ? 'application/json' : 'text/plain',
       );
     }
 

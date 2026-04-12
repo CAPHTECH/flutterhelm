@@ -47,6 +47,17 @@ class LauncherToolService {
     return flutterDevices;
   }
 
+  Future<String> resolveLaunchDeviceId({
+    required String platform,
+    String? deviceId,
+  }) {
+    return _resolveLaunchDeviceId(platform: platform, deviceId: deviceId);
+  }
+
+  Future<void> ensureIosSimulatorBooted(String deviceId) {
+    return _ensureIosSimulatorBooted(deviceId);
+  }
+
   Future<SessionRecord> runApp({
     required String workspaceRoot,
     required String target,

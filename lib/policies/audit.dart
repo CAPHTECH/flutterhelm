@@ -14,6 +14,7 @@ class AuditEvent {
     this.tool,
     this.durationMs,
     this.errorCode,
+    this.approvalRequestId,
   });
 
   final DateTime timestamp;
@@ -27,6 +28,7 @@ class AuditEvent {
   final String? tool;
   final int? durationMs;
   final String? errorCode;
+  final String? approvalRequestId;
 
   Map<String, Object?> toJson() {
     return <String, Object?>{
@@ -41,6 +43,7 @@ class AuditEvent {
       'result': result,
       'durationMs': durationMs,
       'errorCode': errorCode,
+      'approvalRequestId': approvalRequestId,
     };
   }
 }

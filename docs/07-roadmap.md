@@ -17,11 +17,13 @@ FlutterHelm は最初から全部を載せるべきではありません。
 
 ## 現在地点
 
-この repository では Phase 1 の local alpha surface を実装済みです。
+この repository では Phase 2 の beta checkpoint まで実装済みです。
 
 - workspace/session/launcher/runtime_readonly/tests が local で動く
 - repo-local `fixtures/sample_app` で deterministic validation ができる
-- 以降の優先順位は dependency mutation, integration tests, coverage, profiling, native bridge
+- package search → approval → dependency add/remove が local で動く
+- integration test / coverage artifact / approval audit が local で動く
+- 以降の優先順位は profiling, native bridge, runtime interaction
 
 ## Phase 0 — Foundation
 

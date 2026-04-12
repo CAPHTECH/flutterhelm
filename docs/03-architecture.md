@@ -259,8 +259,8 @@ sequenceDiagram
     C->>H: dependency_add(package, version?)
     H->>P: validate(risk=project_mutation)
     P-->>H: confirmation required
-    H-->>C: approval request / blocked until confirmed
-    C->>H: approve
+    H-->>C: approval_required(approvalRequestId)
+    C->>H: dependency_add(..., approvalToken=approvalRequestId)
     H->>O: execute
     O->>D: add dependency
     D-->>O: updated manifest / logs

@@ -1,14 +1,21 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/server/errors.dart';
 import 'package:flutterhelm/utils/process_runner.dart';
 import 'package:path/path.dart' as p;
 import 'package:yaml/yaml.dart';
 
 class WorkspaceToolService {
-  WorkspaceToolService({required this.processRunner, required this.flutterExecutable});
+  WorkspaceToolService({
+    required this.processRunner,
+    required this.artifactStore,
+    required this.flutterExecutable,
+  });
 
   final ProcessRunner processRunner;
+  final ArtifactStore artifactStore;
   final String flutterExecutable;
 
   Future<List<Map<String, Object?>>> discoverWorkspaces({
@@ -126,6 +133,217 @@ class WorkspaceToolService {
     };
   }
 
+  Future<Map<String, Object?>> pubSearch({
+    required String query,
+    int limit = 10,
+  }) async {
+    final trimmedQuery = query.trim();
+    if (trimmedQuery.isEmpty) {
+      throw FlutterHelmToolError(
+        code: 'PUB_QUERY_REQUIRED',
+        category: 'validation',
+        message: 'pub_search requires a non-empty query.',
+        retryable: true,
+      );
+    }
+    final effectiveLimit = limit.clamp(1, 20).toInt();
+    final client = HttpClient();
+    try {
+      final searchUri = Uri.https('pub.dev', '/api/search', <String, String>{
+        'q': trimmedQuery,
+      });
+      final searchResponse = await _getJson(client, searchUri);
+      final rawPackages = searchResponse['packages'];
+      if (rawPackages is! List) {
+        throw FlutterHelmToolError(
+          code: 'PUB_SEARCH_FAILED',
+          category: 'network',
+          message: 'pub.dev returned an unexpected search response.',
+          retryable: true,
+        );
+      }
+      final packageNames = rawPackages
+          .map((Object? item) => item is Map ? item['package'] : null)
+          .whereType<String>()
+          .take(effectiveLimit)
+          .toList();
+      final packages = await Future.wait(
+        packageNames.map((String package) => _fetchPackageDetails(client, package)),
+      );
+      return <String, Object?>{
+        'query': trimmedQuery,
+        'packages': packages,
+      };
+    } on SocketException catch (error) {
+      throw FlutterHelmToolError(
+        code: 'PUB_SEARCH_FAILED',
+        category: 'network',
+        message: 'pub_search failed: ${error.message}',
+        retryable: true,
+      );
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<Map<String, Object?>> dependencyAdd({
+    required String workspaceRoot,
+    required String package,
+    required String? versionConstraint,
+    required bool devDependency,
+  }) async {
+    final changeId = _nextChangeId('add');
+    final beforeManifest = await _readPubspecText(workspaceRoot);
+    await artifactStore.writeMutationSnapshot(
+      changeId: changeId,
+      label: 'before',
+      contents: beforeManifest,
+    );
+
+    final descriptorPrefix = devDependency ? 'dev:' : '';
+    final descriptor = versionConstraint == null || versionConstraint.isEmpty
+        ? '$descriptorPrefix$package'
+        : '$descriptorPrefix$package:$versionConstraint';
+    final result = await processRunner.run(
+      flutterExecutable,
+      <String>['pub', 'add', descriptor],
+      workingDirectory: workspaceRoot,
+      timeout: const Duration(minutes: 3),
+    );
+    await _writeMutationLogs(
+      changeId: changeId,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    );
+
+    final afterManifest = await _readPubspecText(workspaceRoot);
+    await artifactStore.writeMutationSnapshot(
+      changeId: changeId,
+      label: 'after',
+      contents: afterManifest,
+    );
+
+    final beforeSummary = await _dependencySummary(workspaceRoot, yamlText: beforeManifest);
+    final afterSummary = await _dependencySummary(workspaceRoot, yamlText: afterManifest);
+    final status = result.exitCode == 0 ? 'completed' : 'failed';
+    final payload = <String, Object?>{
+      'changeId': changeId,
+      'action': 'add',
+      'workspaceRoot': workspaceRoot,
+      'package': package,
+      'status': status,
+      'exitCode': result.exitCode,
+      'section': devDependency ? 'dev_dependencies' : 'dependencies',
+      'before': beforeSummary,
+      'after': afterSummary,
+    };
+    await artifactStore.writeMutationSummary(changeId: changeId, payload: payload);
+    if (result.exitCode != 0) {
+      throw FlutterHelmToolError(
+        code: 'DEPENDENCY_ADD_FAILED',
+        category: 'workspace',
+        message: result.stderr.trim().isEmpty ? 'flutter pub add failed.' : result.stderr.trim(),
+        retryable: true,
+        detailsResource: <String, Object?>{
+          'uri': artifactStore.mutationLogUri(changeId, 'stderr'),
+          'mimeType': 'text/plain',
+        },
+      );
+    }
+    return <String, Object?>{
+      ...payload,
+      'resources': <Map<String, Object?>>[
+        <String, Object?>{
+          'uri': artifactStore.mutationLogUri(changeId, 'stdout'),
+          'mimeType': 'text/plain',
+          'title': 'Dependency mutation stdout',
+        },
+        <String, Object?>{
+          'uri': artifactStore.mutationLogUri(changeId, 'stderr'),
+          'mimeType': 'text/plain',
+          'title': 'Dependency mutation stderr',
+        },
+      ],
+      'dependency': _resolvePackageSummary(afterSummary, package, devDependency: devDependency),
+    };
+  }
+
+  Future<Map<String, Object?>> dependencyRemove({
+    required String workspaceRoot,
+    required String package,
+  }) async {
+    final changeId = _nextChangeId('remove');
+    final beforeManifest = await _readPubspecText(workspaceRoot);
+    await artifactStore.writeMutationSnapshot(
+      changeId: changeId,
+      label: 'before',
+      contents: beforeManifest,
+    );
+
+    final result = await processRunner.run(
+      flutterExecutable,
+      <String>['pub', 'remove', package],
+      workingDirectory: workspaceRoot,
+      timeout: const Duration(minutes: 3),
+    );
+    await _writeMutationLogs(
+      changeId: changeId,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    );
+
+    final afterManifest = await _readPubspecText(workspaceRoot);
+    await artifactStore.writeMutationSnapshot(
+      changeId: changeId,
+      label: 'after',
+      contents: afterManifest,
+    );
+
+    final beforeSummary = await _dependencySummary(workspaceRoot, yamlText: beforeManifest);
+    final afterSummary = await _dependencySummary(workspaceRoot, yamlText: afterManifest);
+    final removedFrom = _removedSection(beforeSummary, afterSummary, package);
+    final status = result.exitCode == 0 ? 'completed' : 'failed';
+    final payload = <String, Object?>{
+      'changeId': changeId,
+      'action': 'remove',
+      'workspaceRoot': workspaceRoot,
+      'package': package,
+      'status': status,
+      'exitCode': result.exitCode,
+      'removedFrom': removedFrom,
+      'before': beforeSummary,
+      'after': afterSummary,
+    };
+    await artifactStore.writeMutationSummary(changeId: changeId, payload: payload);
+    if (result.exitCode != 0) {
+      throw FlutterHelmToolError(
+        code: 'DEPENDENCY_REMOVE_FAILED',
+        category: 'workspace',
+        message: result.stderr.trim().isEmpty ? 'flutter pub remove failed.' : result.stderr.trim(),
+        retryable: true,
+        detailsResource: <String, Object?>{
+          'uri': artifactStore.mutationLogUri(changeId, 'stderr'),
+          'mimeType': 'text/plain',
+        },
+      );
+    }
+    return <String, Object?>{
+      ...payload,
+      'resources': <Map<String, Object?>>[
+        <String, Object?>{
+          'uri': artifactStore.mutationLogUri(changeId, 'stdout'),
+          'mimeType': 'text/plain',
+          'title': 'Dependency mutation stdout',
+        },
+        <String, Object?>{
+          'uri': artifactStore.mutationLogUri(changeId, 'stderr'),
+          'mimeType': 'text/plain',
+          'title': 'Dependency mutation stderr',
+        },
+      ],
+    };
+  }
+
   Future<Map<String, Object?>> resolveSymbol({
     required String workspaceRoot,
     required String symbol,
@@ -162,9 +380,7 @@ class WorkspaceToolService {
     if (document is! YamlMap) {
       return <String, Object?>{};
     }
-    return document.map<String, Object?>(
-      (dynamic key, dynamic value) => MapEntry<String, Object?>(key.toString(), value),
-    );
+    return _plainMap(document);
   }
 
   bool _isFlutterWorkspace(Map<String, Object?> pubspec) {
@@ -172,7 +388,7 @@ class WorkspaceToolService {
       return true;
     }
     final dependencies = pubspec['dependencies'];
-    if (dependencies is YamlMap) {
+    if (dependencies is Map) {
       return dependencies.containsKey('flutter');
     }
     return false;
@@ -197,5 +413,198 @@ class WorkspaceToolService {
       }
     }
     return RegExp('\\b${RegExp.escape(symbol)}\\s*\\(').hasMatch(line) && line.contains('{');
+  }
+
+  Future<Map<String, Object?>> _getJson(HttpClient client, Uri uri) async {
+    final request = await client.getUrl(uri);
+    request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+    final response = await request.close();
+    final body = await response.transform(utf8.decoder).join();
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw FlutterHelmToolError(
+        code: 'PUB_SEARCH_FAILED',
+        category: 'network',
+        message: 'pub.dev request failed with status ${response.statusCode}.',
+        retryable: true,
+      );
+    }
+    final decoded = jsonDecode(body);
+    if (decoded is Map<String, Object?>) {
+      return decoded;
+    }
+    if (decoded is Map) {
+      return decoded.map<String, Object?>(
+        (Object? key, Object? value) => MapEntry<String, Object?>(key.toString(), value),
+      );
+    }
+    throw FlutterHelmToolError(
+      code: 'PUB_SEARCH_FAILED',
+      category: 'network',
+      message: 'pub.dev returned malformed JSON.',
+      retryable: true,
+    );
+  }
+
+  Future<Map<String, Object?>> _fetchPackageDetails(
+    HttpClient client,
+    String package,
+  ) async {
+    final response = await _getJson(
+      client,
+      Uri.https('pub.dev', '/api/packages/$package'),
+    );
+    final latest = _mapValue(response['latest']);
+    final pubspec = _mapValue(latest['pubspec']);
+    return <String, Object?>{
+      'package': package,
+      'latestVersion': latest['version'],
+      'description': pubspec['description'] as String? ?? '',
+      'url': 'https://pub.dev/packages/$package',
+      if (response['publisherId'] is String) 'publisher': response['publisherId'],
+      if (latest['published'] is String) 'publishedAt': latest['published'],
+    };
+  }
+
+  Future<String> _readPubspecText(String workspaceRoot) {
+    return File(p.join(workspaceRoot, 'pubspec.yaml')).readAsString();
+  }
+
+  Future<Map<String, Object?>> _dependencySummary(
+    String workspaceRoot, {
+    String? yamlText,
+  }) async {
+    final document = loadYaml(yamlText ?? await _readPubspecText(workspaceRoot));
+    if (document is! YamlMap) {
+      return const <String, Object?>{
+        'dependencies': <String, Object?>{},
+        'devDependencies': <String, Object?>{},
+      };
+    }
+    final pubspec = _plainMap(document);
+    return <String, Object?>{
+      'dependencies': _stringifyDependencySection(pubspec['dependencies']),
+      'devDependencies': _stringifyDependencySection(pubspec['dev_dependencies']),
+    };
+  }
+
+  Map<String, Object?> _stringifyDependencySection(Object? section) {
+    final plain = _mapValue(section);
+    final sortedKeys = plain.keys.toList()..sort();
+    return <String, Object?>{
+      for (final key in sortedKeys) key: _stringifyDependencyValue(plain[key]),
+    };
+  }
+
+  Object? _stringifyDependencyValue(Object? value) {
+    if (value is Map<Object?, Object?>) {
+      return value.map<String, Object?>(
+        (Object? key, Object? nestedValue) =>
+            MapEntry<String, Object?>(key.toString(), _stringifyDependencyValue(nestedValue)),
+      );
+    }
+    if (value is YamlMap) {
+      return _stringifyDependencyValue(_plainMap(value));
+    }
+    if (value is YamlList) {
+      return value.map<Object?>((Object? item) => _stringifyDependencyValue(item)).toList();
+    }
+    return value;
+  }
+
+  Map<String, Object?>? _resolvePackageSummary(
+    Map<String, Object?> dependencySummary,
+    String package, {
+    required bool devDependency,
+  }) {
+    final section = devDependency ? 'devDependencies' : 'dependencies';
+    final values = _mapValue(dependencySummary[section]);
+    if (!values.containsKey(package)) {
+      return null;
+    }
+    return <String, Object?>{
+      'name': package,
+      'section': devDependency ? 'dev_dependencies' : 'dependencies',
+      'constraint': values[package],
+    };
+  }
+
+  String? _removedSection(
+    Map<String, Object?> beforeSummary,
+    Map<String, Object?> afterSummary,
+    String package,
+  ) {
+    final beforeDependencies = _mapValue(beforeSummary['dependencies']);
+    final afterDependencies = _mapValue(afterSummary['dependencies']);
+    if (beforeDependencies.containsKey(package) && !afterDependencies.containsKey(package)) {
+      return 'dependencies';
+    }
+    final beforeDevDependencies = _mapValue(beforeSummary['devDependencies']);
+    final afterDevDependencies = _mapValue(afterSummary['devDependencies']);
+    if (beforeDevDependencies.containsKey(package) &&
+        !afterDevDependencies.containsKey(package)) {
+      return 'dev_dependencies';
+    }
+    return null;
+  }
+
+  Future<void> _writeMutationLogs({
+    required String changeId,
+    required String stdout,
+    required String stderr,
+  }) async {
+    for (final line in stdout.split('\n')) {
+      if (line.trim().isEmpty) {
+        continue;
+      }
+      await artifactStore.appendMutationLog(
+        changeId: changeId,
+        stream: 'stdout',
+        line: line,
+      );
+    }
+    for (final line in stderr.split('\n')) {
+      if (line.trim().isEmpty) {
+        continue;
+      }
+      await artifactStore.appendMutationLog(
+        changeId: changeId,
+        stream: 'stderr',
+        line: line,
+      );
+    }
+  }
+
+  String _nextChangeId(String action) {
+    final now = DateTime.now().toUtc();
+    return 'mut_${now.microsecondsSinceEpoch.toRadixString(36)}_${action.substring(0, 1)}';
+  }
+
+  Map<String, Object?> _plainMap(YamlMap map) {
+    return map.map<String, Object?>(
+      (dynamic key, dynamic value) => MapEntry<String, Object?>(key.toString(), _plainValue(value)),
+    );
+  }
+
+  Object? _plainValue(Object? value) {
+    if (value is YamlMap) {
+      return _plainMap(value);
+    }
+    if (value is YamlList) {
+      return value.map<Object?>((Object? item) => _plainValue(item)).toList();
+    }
+    return value;
+  }
+
+  Map<String, Object?> _mapValue(Object? value) {
+    if (value is Map<String, Object?>) {
+      return value;
+    }
+    if (value is Map) {
+      return value.map<String, Object?>(
+        (Object? key, Object? nestedValue) =>
+            MapEntry<String, Object?>(key.toString(), nestedValue),
+      );
+    }
+    return <String, Object?>{};
   }
 }

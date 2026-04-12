@@ -20,7 +20,7 @@ mise exec -- pnpm -C harness bootstrap
 ```
 
 `bootstrap` は `harness/.venv-docs` を作成し、MkDocs を local に導入します。
-Phase 1 implementation checks は repo root の `mise.toml` と Dart/Flutter package を使うため、先に toolchain を有効化します。
+Phase 2 implementation checks は repo root の `mise.toml` と Dart/Flutter package を使うため、先に toolchain を有効化します。
 
 ## よく使うコマンド
 
@@ -46,8 +46,8 @@ mise exec -- pnpm -C harness report
 - `smoke`: docs site build と README/nav 整合
 - `smoke`: docs site build と initialize/ping smoke
 - `regression`: workflow/tool/risk/resource/session/approval の core contract
-- `regression`: 上記に加えて Phase 1 tool exposure, sample app flow, root/session flow, audit log
-- `runtime`: iOS simulator で `run_app -> runtime errors -> widget tree -> attach/stop guard` を確認
+- `regression`: 上記に加えて tool exposure, sample app flow, package approval replay, coverage readback, root/session flow, audit log
+- `runtime`: iOS simulator で `run_app -> runtime errors -> widget tree -> attach/stop guard -> run_integration_tests` を確認
 - `edge`: 実務でよく聞かれる設計質問
 - `adversarial`: 誤った前提に対する防御的回答
 

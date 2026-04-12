@@ -16,18 +16,21 @@ FlutterHelm は、これらを置き換えるものではありません。
 ## ステータス
 
 - 状態: **Local alpha implementation**
-- 実装: **Phase 1 core is available in this repository**
+- 実装: **Phase 2 beta core is available in this repository**
 - 実装前提: MCP client は最低でも **Tools** と **Resources** を扱えること
 - 推奨: **Roots** を扱えること
 - 初期 transport: **stdio-first**
 - 主要スコープ: Flutter ローカル開発、実行中アプリの観測、テスト、profiling、限定的な runtime interaction
 
-現在コードで実装されているのは Phase 1 のローカル反復面です。
+現在コードで実装されているのは Phase 2 のローカル反復面です。
 
 - `workspace_discover`
 - `analyze_project`
 - `resolve_symbol`
 - `format_files`
+- `pub_search`
+- `dependency_add`
+- `dependency_remove`
 - `workspace_show`
 - `workspace_set_root`
 - `session_open`
@@ -42,9 +45,13 @@ FlutterHelm は、これらを置き換えるものではありません。
 - `get_app_state_summary`
 - `run_unit_tests`
 - `run_widget_tests`
+- `run_integration_tests`
+- `get_test_results`
+- `collect_coverage`
 - `serverInfo` / capability negotiation
 
-未実装なのは dependency mutation / integration tests / coverage completion / profiling / native bridge / runtime interaction です。
+dependency mutation は replay token approval を通して実行され、unit/widget/integration test は report/coverage resource を返します。
+未実装なのは profiling / native bridge / runtime interaction です。
 session metadata は `stateDir/sessions.json` に永続化され、artifact は `stateDir/artifacts/` に保存されます。live process handle 自体は process lifetime のみです。
 
 ## なぜ別レイヤが必要か
@@ -170,4 +177,4 @@ mise exec -- pnpm -C harness qa
 `bootstrap` は `harness/.venv-docs` に MkDocs を導入するため、global な `mkdocs` install は不要です。  
 `smoke` / `contracts` / `runtime` を回す前に `mise trust && mise install && mise exec -- dart pub get` を済ませてください。  
 report は `harness/reports/`、QA trace は `harness/traces/` に残ります。
-`runtime` は macOS + Xcode simulator 前提のローカル検証です。
+`contracts` は package approval replay / coverage readback まで、`runtime` は macOS + Xcode simulator 前提で overflow 診断と integration test まで見ます。

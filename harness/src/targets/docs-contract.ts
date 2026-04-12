@@ -80,10 +80,25 @@ class Phase0HarnessClient {
     });
   }
 
-  static async start(repoRoot: string, stateDir: string, clientRoots: string[]): Promise<Phase0HarnessClient> {
+  static async start(
+    repoRoot: string,
+    stateDir: string,
+    clientRoots: string[],
+    options: { allowRootFallback?: boolean } = {},
+  ): Promise<Phase0HarnessClient> {
     const child = spawn(
       "mise",
-      ["exec", "--", "dart", "run", "bin/flutterhelm.dart", "serve", "--state-dir", stateDir],
+      [
+        "exec",
+        "--",
+        "dart",
+        "run",
+        "bin/flutterhelm.dart",
+        "serve",
+        "--state-dir",
+        stateDir,
+        ...(options.allowRootFallback ? ["--allow-root-fallback"] : []),
+      ],
       {
         cwd: repoRoot,
         env: process.env,
@@ -431,6 +446,45 @@ async function checkPhase0RootSessionFlow(repoRoot: string): Promise<void> {
       throw new Error(`Expected WORKSPACE_ROOT_REQUIRED, got ${String(error.code)}`);
     }
   });
+
+  const fallbackFixture = await createPhase0Fixture();
+  const fallbackClient = await Phase0HarnessClient.start(
+    repoRoot,
+    fallbackFixture.stateDir,
+    [],
+    { allowRootFallback: true },
+  );
+  try {
+    await fallbackClient.initialize();
+    const approvalRequired = await fallbackClient.callTool("workspace_set_root", {
+      workspaceRoot: fallbackFixture.workspaceRoot,
+    });
+    const structured = requireObject(
+      approvalRequired.structuredContent,
+      "workspace_set_root fallback structuredContent",
+    );
+    if (structured.status !== "approval_required") {
+      throw new Error(`Expected approval_required in fallback mode, got ${String(structured.status)}`);
+    }
+    const approvalToken = requireString(
+      structured.approvalRequestId,
+      "workspace_set_root.approvalRequestId",
+    );
+    const approved = await fallbackClient.callTool("workspace_set_root", {
+      workspaceRoot: fallbackFixture.workspaceRoot,
+      approvalToken,
+    });
+    const approvedStructured = requireObject(
+      approved.structuredContent,
+      "workspace_set_root approved structuredContent",
+    );
+    if (await realpath(requireString(approvedStructured.activeRoot, "approved activeRoot")) !== fallbackFixture.workspaceRoot) {
+      throw new Error("workspace_set_root with approval token did not set the active root");
+    }
+  } finally {
+    await fallbackClient.close();
+    await rm(fallbackFixture.sandboxDir, { recursive: true, force: true });
+  }
 }
 
 async function checkPhase0AuditLog(repoRoot: string): Promise<void> {
@@ -502,14 +556,20 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
     const expectedTools = [
       "analyze_project",
       "attach_app",
+      "collect_coverage",
+      "dependency_add",
+      "dependency_remove",
       "device_list",
       "format_files",
       "get_app_state_summary",
       "get_logs",
       "get_runtime_errors",
+      "get_test_results",
       "get_widget_tree",
+      "pub_search",
       "resolve_symbol",
       "run_app",
+      "run_integration_tests",
       "run_unit_tests",
       "run_widget_tests",
       "session_list",
@@ -569,7 +629,51 @@ async function checkPhase1SampleAppFlow(repoRoot: string): Promise<void> {
       throw new Error(`format_files did not rewrite lib/format_me.dart as expected: ${formattedText}`);
     }
 
-    const unitTests = await client.callTool("run_unit_tests");
+    const pubSearch = await client.callTool("pub_search", {
+      query: "async",
+      limit: 3,
+    });
+    const pubStructured = requireObject(pubSearch.structuredContent, "pub_search.structuredContent");
+    const packages = requireArray(pubStructured.packages, "pub_search.packages");
+    if (packages.length === 0) {
+      throw new Error("pub_search did not return any package candidates");
+    }
+
+    const addApproval = await client.callTool("dependency_add", {
+      package: "async",
+    });
+    const addApprovalStructured = requireObject(addApproval.structuredContent, "dependency_add approval structuredContent");
+    if (addApprovalStructured.status !== "approval_required") {
+      throw new Error(`dependency_add should require approval, got ${JSON.stringify(addApprovalStructured)}`);
+    }
+    const addApproved = await client.callTool("dependency_add", {
+      package: "async",
+      approvalToken: requireString(addApprovalStructured.approvalRequestId, "dependency_add.approvalRequestId"),
+    });
+    const addStructured = requireObject(addApproved.structuredContent, "dependency_add.structuredContent");
+    if (addStructured.status !== "completed") {
+      throw new Error(`dependency_add failed: ${JSON.stringify(addStructured)}`);
+    }
+
+    const removeApproval = await client.callTool("dependency_remove", {
+      package: "async",
+    });
+    const removeApprovalStructured = requireObject(removeApproval.structuredContent, "dependency_remove approval structuredContent");
+    if (removeApprovalStructured.status !== "approval_required") {
+      throw new Error(`dependency_remove should require approval, got ${JSON.stringify(removeApprovalStructured)}`);
+    }
+    const removeApproved = await client.callTool("dependency_remove", {
+      package: "async",
+      approvalToken: requireString(removeApprovalStructured.approvalRequestId, "dependency_remove.approvalRequestId"),
+    });
+    const removeStructured = requireObject(removeApproved.structuredContent, "dependency_remove.structuredContent");
+    if (removeStructured.status !== "completed") {
+      throw new Error(`dependency_remove failed: ${JSON.stringify(removeStructured)}`);
+    }
+
+    const unitTests = await client.callTool("run_unit_tests", {
+      coverage: true,
+    });
     const unitStructured = requireObject(unitTests.structuredContent, "run_unit_tests.structuredContent");
     const unitRunId = requireString(unitStructured.runId, "run_unit_tests.runId");
     const unitSummary = requireObject(unitStructured.summary, "run_unit_tests.summary");
@@ -577,12 +681,31 @@ async function checkPhase1SampleAppFlow(repoRoot: string): Promise<void> {
       throw new Error(`run_unit_tests reported failures: ${JSON.stringify(unitSummary)}`);
     }
 
-    const widgetTests = await client.callTool("run_widget_tests");
+    const widgetTests = await client.callTool("run_widget_tests", {
+      coverage: true,
+    });
     const widgetStructured = requireObject(widgetTests.structuredContent, "run_widget_tests.structuredContent");
     const widgetRunId = requireString(widgetStructured.runId, "run_widget_tests.runId");
     const widgetSummary = requireObject(widgetStructured.summary, "run_widget_tests.summary");
     if (widgetSummary.failed !== 0) {
       throw new Error(`run_widget_tests reported failures: ${JSON.stringify(widgetSummary)}`);
+    }
+
+    const testResults = await client.callTool("get_test_results", {
+      runId: unitRunId,
+    });
+    const testResultsStructured = requireObject(testResults.structuredContent, "get_test_results.structuredContent");
+    if (testResultsStructured.runId !== unitRunId) {
+      throw new Error(`get_test_results returned ${String(testResultsStructured.runId)} instead of ${unitRunId}`);
+    }
+
+    const coverage = await client.callTool("collect_coverage", {
+      runId: unitRunId,
+    });
+    const coverageStructured = requireObject(coverage.structuredContent, "collect_coverage.structuredContent");
+    const coverageSummary = requireObject(coverageStructured.summary, "collect_coverage.summary");
+    if (typeof coverageSummary.lineCoveragePercent !== "number") {
+      throw new Error(`collect_coverage returned malformed summary: ${JSON.stringify(coverageSummary)}`);
     }
 
     const resources = await client.request("resources/list");
@@ -592,8 +715,12 @@ async function checkPhase1SampleAppFlow(repoRoot: string): Promise<void> {
     for (const expected of [
       `test-report://${unitRunId}/summary`,
       `test-report://${unitRunId}/details`,
+      `coverage://${unitRunId}/summary`,
+      `coverage://${unitRunId}/lcov`,
       `test-report://${widgetRunId}/summary`,
       `test-report://${widgetRunId}/details`,
+      `coverage://${widgetRunId}/summary`,
+      `coverage://${widgetRunId}/lcov`,
     ]) {
       if (!uris.includes(expected)) {
         throw new Error(`resources/list is missing ${expected}`);
@@ -608,6 +735,28 @@ async function checkPhase1SampleAppFlow(repoRoot: string): Promise<void> {
     const decoded = JSON.parse(requireString(summaryBody.text, "unit summary text")) as Record<string, unknown>;
     if (decoded.runId !== unitRunId) {
       throw new Error(`unit test summary returned ${String(decoded.runId)} instead of ${unitRunId}`);
+    }
+
+    const coverageResource = await client.request("resources/read", {
+      uri: `coverage://${unitRunId}/summary`,
+    });
+    const coverageContents = requireArray(coverageResource.contents, "coverage summary contents");
+    const coverageBody = requireObject(coverageContents[0], "coverage summary content");
+    const coverageDecoded = JSON.parse(requireString(coverageBody.text, "coverage summary text")) as Record<string, unknown>;
+    if (coverageDecoded.runId !== unitRunId) {
+      throw new Error(`coverage summary returned ${String(coverageDecoded.runId)} instead of ${unitRunId}`);
+    }
+
+    const auditPath = resolve(fixture.stateDir, "audit.jsonl");
+    const auditLines = (await readFile(auditPath, "utf8")).trim().split("\n").filter(Boolean);
+    const approvalEvents = auditLines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((event) => event.tool === "dependency_add" || event.tool === "dependency_remove");
+    if (!approvalEvents.some((event) => event.result === "approval_required")) {
+      throw new Error("audit log is missing dependency approval_required events");
+    }
+    if (!approvalEvents.some((event) => event.result === "approved")) {
+      throw new Error("audit log is missing dependency approved events");
     }
   });
 }
@@ -719,6 +868,41 @@ async function checkPhase1RuntimeOverflowFlow(repoRoot: string): Promise<void> {
           sessionId: ownedSessionId,
         });
       }
+    }
+
+    const integration = await client.callTool("run_integration_tests", {
+      platform: "ios",
+      target: "integration_test/app_test.dart",
+    });
+    const integrationStructured = requireObject(
+      integration.structuredContent,
+      "run_integration_tests.structuredContent",
+    );
+    const integrationRunId = requireString(
+      integrationStructured.runId,
+      "run_integration_tests.runId",
+    );
+    if (integrationStructured.status !== "completed") {
+      throw new Error(`run_integration_tests failed: ${JSON.stringify(integrationStructured)}`);
+    }
+
+    const integrationResults = await client.callTool("get_test_results", {
+      runId: integrationRunId,
+    });
+    const integrationResultsStructured = requireObject(
+      integrationResults.structuredContent,
+      "get_test_results integration structuredContent",
+    );
+    if (integrationResultsStructured.runId !== integrationRunId) {
+      throw new Error(`get_test_results returned ${String(integrationResultsStructured.runId)} instead of ${integrationRunId}`);
+    }
+
+    const resources = await client.request("resources/list");
+    const uris = requireArray(resources.resources, "resources/list.resources")
+      .map((value) => requireObject(value, "resource"))
+      .map((value) => requireString(value.uri, "resource.uri"));
+    if (!uris.includes(`test-report://${integrationRunId}/summary`)) {
+      throw new Error(`resources/list is missing integration test summary for ${integrationRunId}`);
     }
   });
 }

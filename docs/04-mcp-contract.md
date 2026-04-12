@@ -28,9 +28,10 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 
 ### Current local alpha surface
 
-この repository の current implementation は Phase 1 相当です。
+この repository の current implementation は Phase 2 相当です。
 
 - `workspace`, `session`, `launcher`, `runtime_readonly`, `tests` workflow を local で実装
+- package search / dependency mutation approval replay / integration tests / coverage readback を含む
 - transport は `stdio-first`
 - runtime interaction / profiling / platform bridge は未実装
 
