@@ -17,28 +17,20 @@ on:
 
 jobs:
   harness:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: true
-      max-parallel: 2
-      matrix:
-        os: [ubuntu-latest]
-        node: [20, 22]
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: jdx/mise-action@v3
         with:
-          node-version: ${{ matrix.node }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+          install: true
+          cache: true
       - name: Install harness dependencies
-        run: npm --prefix harness install
+        run: pnpm -C harness install --frozen-lockfile
       - name: Bootstrap docs toolchain
-        run: npm --prefix harness run bootstrap
+        run: pnpm -C harness bootstrap
       - name: Validate harness
-        run: npm --prefix harness run validate
+        run: pnpm -C harness validate
       - name: Select harness tag
         id: select-tag
         shell: bash
@@ -49,11 +41,11 @@ jobs:
             echo "value=smoke" >> "$GITHUB_OUTPUT"
           fi
       - name: Run harness
-        run: npm --prefix harness run run -- --tag "${{ steps.select-tag.outputs.value }}"
+        run: pnpm -C harness run -- --tag "${{ steps.select-tag.outputs.value }}"
       - name: Upload harness artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: harness-${{ steps.select-tag.outputs.value }}-${{ matrix.os }}-node${{ matrix.node }}
+          name: harness-${{ steps.select-tag.outputs.value }}-ubuntu-latest
           path: |
             harness/reports
             harness/traces

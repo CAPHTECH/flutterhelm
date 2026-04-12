@@ -2,15 +2,16 @@
   "name": "@flutterhelm/harness",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "bootstrap": "npm run build && node --enable-source-maps dist/cli.js bootstrap",
+    "bootstrap": "pnpm run build && node --enable-source-maps dist/cli.js bootstrap",
     "run": "node --enable-source-maps dist/cli.js run",
     "validate": "node --enable-source-maps dist/cli.js validate",
     "report": "node --enable-source-maps dist/cli.js report",
-    "smoke": "npm run bootstrap && npm run validate && npm run run -- --tag smoke",
-    "contracts": "npm run build && npm run validate && npm run run -- --tag regression",
-    "qa": "npm run build && npm run validate && npm run run -- --tag edge && npm run run -- --tag adversarial"
+    "smoke": "pnpm run bootstrap && pnpm run validate && pnpm run run -- --tag smoke",
+    "contracts": "pnpm run build && pnpm run validate && pnpm run run -- --tag regression",
+    "qa": "pnpm run build && pnpm run validate && pnpm run run -- --tag edge && pnpm run run -- --tag adversarial"
   },
   "devDependencies": {
     "@types/node": "^20.16.0",

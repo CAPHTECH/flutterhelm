@@ -425,7 +425,7 @@ async function checkPhase0AuditLog(repoRoot: string): Promise<void> {
 async function checkMkDocsBuild(repoRoot: string, harnessRoot: string): Promise<void> {
   const docsPython = resolveDocsPython(harnessRoot);
   if (!(await pathExists(docsPython))) {
-    throw new Error("MkDocs bootstrap is missing. Run `npm --prefix harness run bootstrap` first.");
+    throw new Error("MkDocs bootstrap is missing. Run `mise exec -- pnpm -C harness bootstrap` first.");
   }
 
   const siteDir = await mkdtemp(resolve(tmpdir(), "flutterhelm-harness-site-"));

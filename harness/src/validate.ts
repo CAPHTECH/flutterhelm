@@ -109,6 +109,7 @@ export async function validateHarness(rootDir = process.cwd()): Promise<string[]
   const errors: string[] = [];
   const repoRoot = resolveRepoRoot(rootDir);
   await ensurePath(resolveHarnessPath(rootDir, "package.json"), "package.json", errors);
+  await ensurePath(resolveHarnessPath(rootDir, "pnpm-lock.yaml"), "pnpm-lock.yaml", errors);
   await ensurePath(resolveHarnessPath(rootDir, "tsconfig.json"), "tsconfig.json", errors);
   await ensurePath(resolveHarnessPath(rootDir, "harness.config.json"), "harness.config.json", errors);
   await ensurePath(resolveHarnessPath(rootDir, "README.md"), "README.md", errors);
