@@ -15,14 +15,14 @@ FlutterHelm は、これらを置き換えるものではありません。
 
 ## ステータス
 
-- 状態: **Local alpha implementation with Phase 6 hardening core started**
-- 実装: **Phase 5 optional runtime interaction + Sprint 8 hardening core are available in this repository**
+- 状態: **Local alpha implementation with Phase 6 hardening and ecosystem preview available**
+- 実装: **Phase 5 optional runtime interaction + Sprint 8 hardening core + Sprint 9 adapter registry / HTTP preview preview are available in this repository**
 - 実装前提: MCP client は最低でも **Tools** と **Resources** を扱えること
 - 推奨: **Roots** を扱えること
 - 初期 transport: **stdio-first**
 - 主要スコープ: Flutter ローカル開発、実行中アプリの観測、テスト、profiling、native handoff
 
-現在コードで実装されているのは Phase 5 のローカル反復面に、Sprint 8 hardening core を足した面です。
+現在コードで実装されているのは Phase 5 のローカル反復面に、Sprint 8 hardening core と Sprint 9 ecosystem preview を足した面です。
 
 - `workspace_discover`
 - `analyze_project`
@@ -33,6 +33,7 @@ FlutterHelm は、これらを置き換えるものではありません。
 - `dependency_remove`
 - `workspace_show`
 - `compatibility_check`
+- `adapter_list`
 - `workspace_set_root`
 - `session_open`
 - `session_list`
@@ -74,6 +75,7 @@ platform bridge は handoff-only で動作し、`native-handoff://<session-id>/i
 runtime interaction は external adapter backend で実装されていますが、workflow は opt-in のままです。`tap_widget`, `enter_text`, `scroll_until_visible`, `hot_reload`, `hot_restart` は `runtime_interaction` を有効化した時だけ露出します。`capture_screenshot` は `runtime_readonly` に残し、driver 未接続時は iOS simulator なら `simctl` fallback を使います。
 session metadata は `stateDir/sessions.json` に永続化され、artifact は `stateDir/artifacts/` に保存されます。live process handle 自体は process lifetime のみです。
 Sprint 8 では fail-fast concurrency handling、file-backed artifact pinning、config profile overlay、compatibility preflight を追加しています。競合する mutation は `SESSION_BUSY` / `WORKSPACE_BUSY` で即座に拒否され、pin 済み artifact は startup retention sweep の対象から外れます。
+Sprint 9 では adapter registry を導入し、`config://adapters/current` と `adapter_list` で active provider/family health を見られるようにしました。transport は引き続き `stdio-first` ですが、localhost 限定の `--transport http` preview も追加しています。HTTP preview は request-response only で、SSE/resume は未対応、Roots transport は unsupported のため fallback semantics に従います。
 
 ## なぜ別レイヤが必要か
 
@@ -174,6 +176,20 @@ config/state の既定配置は `~/.config/flutterhelm/` です。
 
 必要なら `--config`, `--state-dir`, `--profile` で上書きできます。`FLUTTERHELM_PROFILE` でも profile を選べます。
 
+HTTP preview を使う場合は次を追加します。
+
+```bash
+mise exec -- dart run bin/flutterhelm.dart serve \
+  --transport http \
+  --http-host 127.0.0.1 \
+  --http-port 0 \
+  --http-path /mcp
+```
+
+主な preview 用 flag は `--transport http`, `--http-host`, `--http-port`, `--http-path` です。
+
+HTTP preview は localhost-only の preview です。`MCP-Session-Id` ベースの session は持ちますが、Roots transport は扱わず、write tool は `--allow-root-fallback` と explicit root selection に従います。
+
 `profiles.<name>` overlay を config に定義すると、workflow/adapters/fallbacks/retention などを切り替えられます。
 
 ```yaml
@@ -190,11 +206,24 @@ profiles:
       - platform_bridge
       - runtime_interaction
     adapters:
-      runtimeDriver:
-        enabled: true
+      active:
+        runtimeDriver: local.fake.runtimeDriver
+      providers:
+        local.fake.runtimeDriver:
+          kind: stdio_json
+          families:
+            - runtimeDriver
+          command: dart
+          args:
+            - run
+            - tool/fake_stdio_adapter_provider.dart
+          startupTimeoutMs: 5000
 ```
 
-hardening 系の read-only resource として、`config://compatibility/current` と `config://artifacts/pins` も公開されます。
+legacy adapter fields も current implementation では読み込めますが、Sprint 9 以降の推奨 shape は `adapters.active` / `adapters.providers` です。
+custom provider kind は `stdio_json` です。
+
+hardening / ecosystem 系の read-only resource として、`config://compatibility/current`、`config://artifacts/pins`、`config://adapters/current` も公開されます。
 
 repo-local の deterministic fixture は `fixtures/sample_app/` にあります。
 
@@ -218,10 +247,11 @@ mise exec -- pnpm -C harness profiling
 mise exec -- pnpm -C harness bridge
 mise exec -- pnpm -C harness interaction
 mise exec -- pnpm -C harness hardening
+mise exec -- pnpm -C harness ecosystem
 mise exec -- pnpm -C harness qa
 ```
 
 `bootstrap` は `harness/.venv-docs` に MkDocs を導入するため、global な `mkdocs` install は不要です。  
 `smoke` / `contracts` / `runtime` を回す前に `mise trust && mise install && mise exec -- dart pub get` を済ませてください。  
 report は `harness/reports/`、QA trace は `harness/traces/` に残ります。
-`contracts` は package approval replay / coverage readback / platform bridge exposure / Phase 5 capability metadata まで、`runtime` は macOS + Xcode simulator 前提で overflow 診断と integration test まで見ます。`profiling` は同じく local simulator 上で VM service-backed profiling capture と session health を見ます。`bridge` は iOS native handoff bundle と synthetic Android handoff contract を見ます。`interaction` は opt-in runtime driver を有効にして screenshot / semantic tap-text-scroll / hot reload-restart / attached-session guard を見ます。`hardening` は profile overlay, compatibility preflight, artifact pin lifecycle, busy rejection を見ます。
+`contracts` は package approval replay / coverage readback / platform bridge exposure / Phase 5 capability metadata まで、`runtime` は macOS + Xcode simulator 前提で overflow 診断と integration test まで見ます。`profiling` は同じく local simulator 上で VM service-backed profiling capture と session health を見ます。`bridge` は iOS native handoff bundle と synthetic Android handoff contract を見ます。`interaction` は opt-in runtime driver を有効にして screenshot / semantic tap-text-scroll / hot reload-restart / attached-session guard を見ます。`hardening` は profile overlay, compatibility preflight, artifact pin lifecycle, busy rejection を見ます。`ecosystem` は adapter registry visibility と localhost-only HTTP preview session flow を見ます。

@@ -81,6 +81,66 @@ fallbacks:
       expect(config.fallbacks.allowRootFallback, isTrue);
     });
 
+    test('normalizes legacy adapters into the registry shape', () {
+      final config = FlutterHelmConfig.fromYamlText('''
+version: 1
+adapters:
+  delegate:
+    type: dart_flutter_mcp
+  flutterCli:
+    executable: flutter
+  runtimeDriver:
+    enabled: true
+    command: npx
+    args:
+      - -y
+      - "@mobilenext/mobile-mcp@latest"
+      - --stdio
+    startupTimeoutMs: 8000
+''');
+
+      expect(
+        config.adapters.activeProviders['runtimeDriver'],
+        'builtin.runtime_driver.external_process',
+      );
+      final provider = config.adapters.providerForFamily('runtimeDriver');
+      expect(provider, isNotNull);
+      expect(provider!.kind, 'builtin');
+      expect(provider.command, 'npx');
+      expect(provider.args, contains('--stdio'));
+      expect(provider.options['enabled'], isTrue);
+    });
+
+    test('parses explicit adapter providers and active family selection', () {
+      final config = FlutterHelmConfig.fromYamlText('''
+version: 1
+adapters:
+  active:
+    runtimeDriver: custom.runtime.driver
+  providers:
+    custom.runtime.driver:
+      kind: stdio_json
+      families:
+        - runtimeDriver
+      command: dart
+      args:
+        - run
+        - tool/fake_stdio_adapter_provider.dart
+      startupTimeoutMs: 9000
+''');
+
+      expect(
+        config.adapters.activeProviders['runtimeDriver'],
+        'custom.runtime.driver',
+      );
+      final provider = config.adapters.providerForFamily('runtimeDriver');
+      expect(provider, isNotNull);
+      expect(provider!.kind, 'stdio_json');
+      expect(provider.command, 'dart');
+      expect(provider.args, contains('tool/fake_stdio_adapter_provider.dart'));
+      expect(provider.startupTimeoutMs, 9000);
+    });
+
     test('rejects unsupported config versions', () {
       expect(
         () => FlutterHelmConfig.fromYamlText('version: 2'),

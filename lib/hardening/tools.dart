@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutterhelm/adapters/registry.dart';
 import 'package:flutterhelm/artifacts/pins.dart';
 import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/config/config.dart';
@@ -104,13 +105,26 @@ class HardeningToolService {
     FlutterHelmConfig? config,
     String? profile,
     String? activeRoot,
+    String transportMode = 'stdio',
   }) async {
     final resolvedConfig =
         config ?? await configRepository.load(selectedProfile: profile);
-    final flutterProbe = await _probeFlutter(resolvedConfig.adapters.flutterExecutable);
-    final runtimeDriverProbe = await _probeCommand(
-      resolvedConfig.adapters.runtimeDriverCommand,
+    final adapterRegistry = AdapterRegistry(
+      config: resolvedConfig,
+      processRunner: processRunner,
     );
+    final runtimeDriverProvider = resolvedConfig.adapters.providerForFamily(
+      'runtimeDriver',
+    );
+    final flutterProbe = await _probeFlutter(resolvedConfig.adapters.flutterExecutable);
+    final runtimeDriverCommand =
+        runtimeDriverProvider?.command ??
+        resolvedConfig.adapters.runtimeDriverCommand;
+    final runtimeDriverProbe = runtimeDriverCommand.isEmpty
+        ? const _CommandProbeResult.unavailable(
+            reason: 'No runtime driver command is configured.',
+          )
+        : await _probeCommand(runtimeDriverCommand);
     final xcodeProbe = Platform.isMacOS
         ? await _probeCommand('xcodebuild', args: const <String>['-version'])
         : const _CommandProbeResult.unavailable(
@@ -146,21 +160,35 @@ class HardeningToolService {
       ),
       'runtimeDriver': _probeStatus(
         supported:
-            resolvedConfig.adapters.runtimeDriverEnabled &&
-            runtimeDriverProbe.available,
-        status: !resolvedConfig.adapters.runtimeDriverEnabled
-            ? 'degraded'
-            : (runtimeDriverProbe.available ? 'ok' : 'unavailable'),
-        reason: !resolvedConfig.adapters.runtimeDriverEnabled
-            ? 'Runtime driver is disabled in the current config.'
-            : runtimeDriverProbe.reason,
+            runtimeDriverProvider != null &&
+            ((runtimeDriverProvider.kind == 'stdio_json' &&
+                    runtimeDriverProbe.available) ||
+                (resolvedConfig.adapters.runtimeDriverEnabled &&
+                    runtimeDriverProbe.available)),
+        status: runtimeDriverProvider == null
+            ? 'unavailable'
+            : ((runtimeDriverProvider.kind == 'stdio_json' ||
+                      resolvedConfig.adapters.runtimeDriverEnabled)
+                  ? (runtimeDriverProbe.available ? 'ok' : 'unavailable')
+                  : 'degraded'),
+        reason: runtimeDriverProvider == null
+            ? 'No runtimeDriver provider is configured.'
+            : (runtimeDriverProvider.kind == 'stdio_json'
+                  ? runtimeDriverProbe.reason
+                  : (!resolvedConfig.adapters.runtimeDriverEnabled
+                        ? 'Runtime driver is disabled in the current config.'
+                        : runtimeDriverProbe.reason)),
         requirements: <String>[
-          'runtimeDriver.enabled must be true.',
-          '${resolvedConfig.adapters.runtimeDriverCommand} must be available on PATH.',
+          if (runtimeDriverProvider?.kind != 'stdio_json')
+            'runtimeDriver.enabled must be true.',
+          '$runtimeDriverCommand must be available on PATH.',
         ],
         extra: <String, Object?>{
-          'command': resolvedConfig.adapters.runtimeDriverCommand,
-          'args': resolvedConfig.adapters.runtimeDriverArgs,
+          'providerId': runtimeDriverProvider?.id,
+          'kind': runtimeDriverProvider?.kind,
+          'command': runtimeDriverCommand,
+          'args':
+              runtimeDriverProvider?.args ?? resolvedConfig.adapters.runtimeDriverArgs,
         },
       ),
       'iosTooling': _probeStatus(
@@ -241,13 +269,22 @@ class HardeningToolService {
       'runtime_interaction': _workflowStatus(
         configured: resolvedConfig.enabledWorkflows.contains('runtime_interaction'),
         supported:
-            resolvedConfig.adapters.runtimeDriverEnabled &&
-            runtimeDriverProbe.available,
-        reason: !resolvedConfig.adapters.runtimeDriverEnabled
-            ? 'runtimeDriver is disabled.'
-            : runtimeDriverProbe.reason,
+            runtimeDriverProvider != null &&
+            ((runtimeDriverProvider.kind == 'stdio_json' &&
+                    runtimeDriverProbe.available) ||
+                (resolvedConfig.adapters.runtimeDriverEnabled &&
+                    runtimeDriverProbe.available)),
+        reason: runtimeDriverProvider == null
+            ? 'runtimeDriver provider is missing.'
+            : (runtimeDriverProvider.kind == 'stdio_json'
+                  ? runtimeDriverProbe.reason
+                  : (!resolvedConfig.adapters.runtimeDriverEnabled
+                        ? 'runtimeDriver is disabled.'
+                        : runtimeDriverProbe.reason)),
       ),
     };
+
+    final adapters = await adapterRegistry.activeAdaptersSummary();
 
     return <String, Object?>{
       'profile': resolvedConfig.activeProfile,
@@ -258,6 +295,21 @@ class HardeningToolService {
         'osVersion': Platform.operatingSystemVersion,
         'dartVersion': _dartVersion(),
       },
+      'transport': <String, Object?>{
+        'mode': transportMode,
+        'httpPreview': _probeStatus(
+          supported: transportMode == 'http',
+          status: transportMode == 'http' ? 'degraded' : 'ok',
+          reason: transportMode == 'http'
+              ? 'HTTP preview is localhost-only, request-response only, and roots transport is unsupported.'
+              : 'stdio remains the primary fully roots-aware transport.',
+          requirements: const <String>[
+            'HTTP preview is intended for localhost development only.',
+            'Roots-aware client roots are not available over HTTP preview in Sprint 9.',
+          ],
+        ),
+      },
+      'adapters': adapters,
       'checks': checks,
       'workflows': workflows,
     };

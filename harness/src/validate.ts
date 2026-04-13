@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { HarnessCase, HarnessConfig, discoverCases, loadConfig, resolveHarnessPath } from "./config.js";
 import { resolveRepoRoot } from "./support.js";
 
-const ALLOWED_TAGS = new Set(["smoke", "regression", "runtime", "profiling", "bridge", "interaction", "hardening", "edge", "adversarial"]);
+const ALLOWED_TAGS = new Set(["smoke", "regression", "runtime", "profiling", "bridge", "interaction", "hardening", "ecosystem", "edge", "adversarial"]);
 
 async function ensurePath(path: string, label: string, errors: string[]): Promise<void> {
   try {

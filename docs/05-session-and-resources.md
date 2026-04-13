@@ -156,6 +156,7 @@ FlutterHelm はこれを徹底します。
 - `session://<session-id>/health`
 - `config://workspace/current`
 - `config://workspace/defaults`
+- `config://adapters/current`
 - `config://artifacts/pins`
 - `config://compatibility/current`
 
@@ -254,6 +255,8 @@ native handoff resource は JSON manifest です。zip export ではなく、既
 - `ready`: native project と handoff evidence が揃っている
 - `partial`: native project はあるが evidence が限定的
 - `unavailable`: 対応 native project が workspace に見つからない
+
+`config://workspace/current` は current implementation で `transportMode`, `httpPreview`, `rootsTransportSupport`, `adaptersResource`, `compatibilityResource` も返します。transport と adapter registry の詳細はそれぞれ `config://workspace/current`, `config://adapters/current`, `config://compatibility/current` で読めます。
 
 ## 8. Resource metadata
 

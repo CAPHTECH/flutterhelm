@@ -148,6 +148,21 @@ List<ToolDefinition> _buildDefinitions() {
       },
     ),
     ToolDefinition(
+      name: 'adapter_list',
+      title: 'Adapter List',
+      description: 'Show active adapter providers and family health.',
+      workflow: 'workspace',
+      risk: RiskClass.readOnly,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'family': <String, Object?>{'type': 'string'},
+        },
+        'additionalProperties': false,
+      },
+    ),
+    ToolDefinition(
       name: 'analyze_project',
       title: 'Analyze Project',
       description: 'Run static analysis.',

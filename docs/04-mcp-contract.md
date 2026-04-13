@@ -28,7 +28,7 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 
 ### Current local alpha surface
 
-この repository の current implementation は Phase 5 に Sprint 8 hardening core を足した状態です。
+この repository の current implementation は Phase 5 に Sprint 8 hardening core と Sprint 9 ecosystem preview を足した状態です。
 
 - `workspace`, `session`, `launcher`, `runtime_readonly`, `tests` workflow を local で実装
 - package search / dependency mutation approval replay / integration tests / coverage readback を含む
@@ -36,7 +36,8 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 - platform bridge workflow を local で実装し、mode は `handoff_only`、IDE automation は行わない
 - runtime interaction workflow を local で実装し、UI backend は external adapter、hot op backend は `flutter run --machine`
 - hardening core を local で実装し、busy policy は `fail_fast`、artifact pinning と config profile overlay と compatibility preflight を含む
-- transport は `stdio-first`
+- adapter registry を local で実装し、custom provider kind は `stdio_json`、legacy adapter config は shim で受理
+- transport は `stdio-first` で、localhost-only の Streamable HTTP preview を追加済み
 
 ## 3. Workflow Groups
 
@@ -61,6 +62,7 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 | `workspace_set_root` | bounded_mutation | active root を設定 |
 | `workspace_show` | read_only | 現在の root / flavor / defaults を表示 |
 | `compatibility_check` | read_only | 現在の実行環境 compatibility matrix を返す |
+| `adapter_list` | read_only | adapter family / active provider / health を返す |
 | `analyze_project` | read_only | static analysis を実行 |
 | `resolve_symbol` | read_only | symbol 情報解決 |
 | `format_files` | project_mutation | 対象 file を format |
@@ -157,6 +159,22 @@ current implementation は capability metadata に次を含みます。
 - `experimental.hardening.compatibilityResource = config://compatibility/current`
 
 競合する mutation は queue せず、`SESSION_BUSY` または `WORKSPACE_BUSY` で即時失敗します。
+
+## 4.10 ecosystem preview capability metadata
+
+current implementation は capability metadata に次を含みます。
+
+- `experimental.httpPreview.mode = preview`
+- `experimental.httpPreview.localhostOnly = true`
+- `experimental.httpPreview.rootsSupport = unsupported`
+- `experimental.httpPreview.sse = false`
+- `experimental.httpPreview.resumability = false`
+- `experimental.adapterRegistry.families = ["delegate", "flutterCli", "profiling", "runtimeDriver", "platformBridge"]`
+- `experimental.adapterRegistry.customProviderKinds = ["stdio_json"]`
+- `experimental.adapterRegistry.legacyConfigShim = true`
+
+HTTP preview は request-response only です。`GET`/SSE/resume は扱わず、`MCP-Session-Id` header で session を維持します。
+stdio が primary transport であり、HTTP preview では Roots transport を扱わないため fallback semantics を前提にします。
 
 ## 5. Sample Tool Schemas
 

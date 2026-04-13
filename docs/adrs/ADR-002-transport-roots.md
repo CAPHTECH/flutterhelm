@@ -33,3 +33,15 @@ fallback は server 起動時の明示 opt-in とする。
 - `workspace_set_root` を用意する
 - fallback mode 中は write tools を制限する
 - HTTP transport は後段 roadmap で扱う
+
+## Sprint 9 update
+
+Sprint 9 で localhost-only の Streamable HTTP preview を追加したが、この ADR の基本判断は変えていない。
+
+- primary transport は引き続き `stdio`
+- HTTP preview は `preview` 扱いで request-response only
+- `GET`/SSE/resume は未対応
+- HTTP preview では Roots transport を扱わず、`supportsRoots=false` 固定
+- HTTP preview 上の write tool は fallback semantics に従い、`--allow-root-fallback` と explicit root selection を要求する
+
+したがって、`stdio-first, roots-aware` が基本であり、HTTP preview は local experimentation のための補助 transport に留める。

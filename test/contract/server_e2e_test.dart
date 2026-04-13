@@ -1611,6 +1611,199 @@ adapters:
         expect(error['code'], 'WORKSPACE_ROOT_REQUIRED');
       },
     );
+
+    test(
+      'activates a custom stdio_json runtime driver provider through the adapter registry',
+      () async {
+        final sandbox = await Directory.systemTemp.createTemp('flutterhelm-e2e');
+        addTearDown(() => sandbox.delete(recursive: true));
+
+        final stateDir = Directory(p.join(sandbox.path, 'state'));
+        final sampleAppRoot = p.join(Directory.current.path, 'fixtures', 'sample_app');
+        final configPath = await _writeConfigFile(
+          p.join(sandbox.path, 'config.yaml'),
+          '''
+version: 1
+workspace:
+  roots:
+    - ${jsonEncode(sampleAppRoot)}
+enabledWorkflows:
+  - workspace
+  - session
+  - launcher
+  - runtime_readonly
+  - runtime_interaction
+adapters:
+  active:
+    runtimeDriver: custom.runtime.driver
+  providers:
+    custom.runtime.driver:
+      kind: stdio_json
+      families:
+        - runtimeDriver
+      command: ${Platform.resolvedExecutable}
+      args:
+        - run
+        - tool/fake_stdio_adapter_provider.dart
+      startupTimeoutMs: 15000
+''',
+        );
+        final client = await _TestMcpClient.start(
+          repoRoot: Directory.current.path,
+          workspaceRoot: sampleAppRoot,
+          stateDir: stateDir.path,
+          configPath: configPath,
+        );
+        addTearDown(client.close);
+
+        await _initializeClient(client);
+        await client.request('tools/call', <String, Object?>{
+          'name': 'workspace_set_root',
+          'arguments': <String, Object?>{'workspaceRoot': sampleAppRoot},
+        });
+
+        final adapterList = await client.request('tools/call', <String, Object?>{
+          'name': 'adapter_list',
+          'arguments': <String, Object?>{'family': 'runtimeDriver'},
+        });
+        expect(adapterList['isError'], isFalse);
+        final adapters =
+            ((adapterList['structuredContent'] as Map<Object?, Object?>)['adapters']
+                    as List<Object?>)
+                .cast<Map<Object?, Object?>>();
+        expect(adapters, hasLength(1));
+        expect(adapters.single['activeProviderId'], 'custom.runtime.driver');
+        expect(adapters.single['kind'], 'stdio_json');
+        expect(adapters.single['healthy'], isTrue);
+
+        final adaptersResource = await client.request(
+          'resources/read',
+          <String, Object?>{'uri': 'config://adapters/current'},
+        );
+        final adaptersBody =
+            (adaptersResource['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        final adaptersDecoded =
+            jsonDecode(adaptersBody['text'] as String) as Map<String, Object?>;
+        final active = adaptersDecoded['active'] as Map<String, Object?>;
+        expect(active['runtimeDriver'], 'custom.runtime.driver');
+
+        final attached = await client.request('tools/call', <String, Object?>{
+          'name': 'attach_app',
+          'arguments': <String, Object?>{
+            'workspaceRoot': sampleAppRoot,
+            'platform': 'ios',
+            'deviceId': 'fake-ios-simulator',
+            'target': 'lib/main.dart',
+            'mode': 'debug',
+            'debugUrl': 'ws://127.0.0.1:34567/ws',
+          },
+        });
+        final sessionId =
+            ((attached['structuredContent'] as Map<Object?, Object?>)['sessionId'])
+                as String;
+        final screenshot = await client.request('tools/call', <String, Object?>{
+          'name': 'capture_screenshot',
+          'arguments': <String, Object?>{'sessionId': sessionId},
+        });
+        expect(screenshot['isError'], isFalse);
+        final screenshotUri =
+            (((screenshot['structuredContent'] as Map<Object?, Object?>)['resource']
+                    as Map<Object?, Object?>)['uri'])
+                as String;
+        expect(screenshotUri, startsWith('screenshot://$sessionId/'));
+      },
+    );
+
+    test(
+      'supports HTTP preview session lifecycle and fallback-only root flow',
+      () async {
+        final sandbox = await Directory.systemTemp.createTemp('flutterhelm-http');
+        addTearDown(() => sandbox.delete(recursive: true));
+
+        final workspace = Directory(p.join(sandbox.path, 'workspace'));
+        await workspace.create(recursive: true);
+        await File(
+          p.join(workspace.path, 'pubspec.yaml'),
+        ).writeAsString('name: http_sample\n');
+
+        final stateDir = Directory(p.join(sandbox.path, 'state'));
+        final client = await _HttpTestMcpClient.start(
+          repoRoot: Directory.current.path,
+          stateDir: stateDir.path,
+          allowRootFallback: true,
+        );
+        addTearDown(client.close);
+
+        final initialize = await client.request('initialize', <String, Object?>{
+          'protocolVersion': '2025-06-18',
+          'capabilities': const <String, Object?>{},
+          'clientInfo': <String, Object?>{
+            'name': 'http-test-client',
+            'version': '1.0.0',
+          },
+        });
+        expect(initialize['serverInfo'], containsPair('name', 'flutterhelm'));
+        await client.notify('notifications/initialized');
+
+        final tools = await client.request('tools/list');
+        final toolNames = (tools['tools'] as List<Object?>)
+            .cast<Map<Object?, Object?>>()
+            .map((Map<Object?, Object?> tool) => tool['name'])
+            .toSet();
+        expect(toolNames, contains('adapter_list'));
+
+        final workspaceShow = await client.request('tools/call', <String, Object?>{
+          'name': 'workspace_show',
+          'arguments': const <String, Object?>{},
+        });
+        final workspaceStructured =
+            workspaceShow['structuredContent'] as Map<Object?, Object?>;
+        expect(workspaceStructured['transportMode'], 'http');
+        expect(workspaceStructured['rootsTransportSupport'], 'unsupported');
+
+        final firstRootSet = await client.request('tools/call', <String, Object?>{
+          'name': 'workspace_set_root',
+          'arguments': <String, Object?>{'workspaceRoot': workspace.path},
+        });
+        expect(firstRootSet['isError'], isFalse);
+        final approvalRequired =
+            firstRootSet['structuredContent'] as Map<Object?, Object?>;
+        expect(approvalRequired['status'], 'approval_required');
+        final approvalToken = approvalRequired['approvalRequestId'] as String;
+
+        final secondRootSet = await client.request('tools/call', <String, Object?>{
+          'name': 'workspace_set_root',
+          'arguments': <String, Object?>{
+            'workspaceRoot': workspace.path,
+            'approvalToken': approvalToken,
+          },
+        });
+        expect(secondRootSet['isError'], isFalse);
+        final rootSetStructured =
+            secondRootSet['structuredContent'] as Map<Object?, Object?>;
+        expect(rootSetStructured['activeRoot'], isNotNull);
+
+        final resources = await client.request('resources/list');
+        final uris = (resources['resources'] as List<Object?>)
+            .cast<Map<Object?, Object?>>()
+            .map((Map<Object?, Object?> resource) => resource['uri'])
+            .toSet();
+        expect(uris, contains('config://adapters/current'));
+
+        final getStatus = await client.getStatusCode();
+        expect(getStatus, HttpStatus.methodNotAllowed);
+
+        final deleteStatus = await client.deleteSession();
+        expect(deleteStatus, HttpStatus.noContent);
+
+        final afterDelete = await client.rawRequest(
+          'tools/list',
+          const <String, Object?>{},
+        );
+        expect(afterDelete.statusCode, HttpStatus.notFound);
+      },
+    );
   });
 }
 
@@ -1660,6 +1853,19 @@ Future<void> _writeTextFile(String path, String contents) async {
 Future<String> _writeConfigFile(String path, String contents) async {
   await _writeTextFile(path, contents);
   return path;
+}
+
+Map<String, Object?> _asMap(Object? value) {
+  if (value is Map<String, Object?>) {
+    return value;
+  }
+  if (value is Map) {
+    return value.map<String, Object?>(
+      (Object? key, Object? nested) =>
+          MapEntry<String, Object?>(key.toString(), nested),
+    );
+  }
+  return <String, Object?>{};
 }
 
 class _TestMcpClient {
@@ -1788,5 +1994,202 @@ class _TestMcpClient {
 
   void _send(Map<String, Object?> message) {
     process.stdin.writeln(jsonEncode(message));
+  }
+}
+
+class _RawHttpResponse {
+  const _RawHttpResponse({
+    required this.statusCode,
+    required this.body,
+    required this.headers,
+  });
+
+  final int statusCode;
+  final String body;
+  final HttpHeaders headers;
+}
+
+class _HttpTestMcpClient {
+  _HttpTestMcpClient._({
+    required this.process,
+    required this.endpoint,
+    required this.httpClient,
+  });
+
+  final Process process;
+  final Uri endpoint;
+  final HttpClient httpClient;
+  String? _sessionId;
+  String? _protocolVersion;
+  int _nextRequestId = 1;
+
+  static Future<_HttpTestMcpClient> start({
+    required String repoRoot,
+    required String stateDir,
+    String? configPath,
+    String? profile,
+    bool allowRootFallback = false,
+  }) async {
+    final process = await Process.start(
+      Platform.resolvedExecutable,
+      <String>[
+        'run',
+        'bin/flutterhelm.dart',
+        'serve',
+        '--transport',
+        'http',
+        '--http-host',
+        '127.0.0.1',
+        '--http-port',
+        '0',
+        '--http-path',
+        '/mcp',
+        if (configPath != null) '--config',
+        if (configPath != null) configPath,
+        if (profile != null) '--profile',
+        if (profile != null) profile,
+        '--state-dir',
+        stateDir,
+        if (allowRootFallback) '--allow-root-fallback',
+      ],
+      workingDirectory: repoRoot,
+    );
+
+    final endpointCompleter = Completer<Uri>();
+    process.stderr
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen((String line) {
+          final marker = 'HTTP preview listening on ';
+          final index = line.indexOf(marker);
+          if (index < 0 || endpointCompleter.isCompleted) {
+            return;
+          }
+          final uriText = line.substring(index + marker.length).trim();
+          endpointCompleter.complete(Uri.parse(uriText));
+        });
+
+    final endpoint = await endpointCompleter.future.timeout(
+      const Duration(seconds: 20),
+    );
+    return _HttpTestMcpClient._(
+      process: process,
+      endpoint: endpoint,
+      httpClient: HttpClient(),
+    );
+  }
+
+  Future<Map<String, Object?>> request(
+    String method, [
+    Map<String, Object?> params = const <String, Object?>{},
+    Duration timeout = const Duration(seconds: 10),
+  ]) async {
+    final id = (_nextRequestId++).toString();
+    final raw = await rawRequest(
+      method,
+      params,
+      id: id,
+      timeout: timeout,
+    );
+    if (raw.statusCode != HttpStatus.ok) {
+      throw StateError(
+        'HTTP request failed with status ${raw.statusCode}: ${raw.body}',
+      );
+    }
+    final decoded = jsonDecode(raw.body) as Map<String, Object?>;
+    if (decoded['error'] case final Map<Object?, Object?> error) {
+      throw StateError(jsonEncode(error));
+    }
+    return decoded['result'] as Map<String, Object?>;
+  }
+
+  Future<void> notify(
+    String method, [
+    Map<String, Object?> params = const <String, Object?>{},
+    Duration timeout = const Duration(seconds: 10),
+  ]) async {
+    final raw = await _send(
+      <String, Object?>{
+        'jsonrpc': '2.0',
+        'method': method,
+        if (params.isNotEmpty) 'params': params,
+      },
+      timeout: timeout,
+    );
+    expect(raw.statusCode, anyOf(HttpStatus.accepted, HttpStatus.ok));
+  }
+
+  Future<int> getStatusCode() async {
+    final request = await httpClient.getUrl(endpoint);
+    final response = await request.close();
+    await response.drain<void>();
+    return response.statusCode;
+  }
+
+  Future<int> deleteSession() async {
+    final request = await httpClient.deleteUrl(endpoint);
+    if (_sessionId != null) {
+      request.headers.set('MCP-Session-Id', _sessionId!);
+    }
+    final response = await request.close();
+    await response.drain<void>();
+    return response.statusCode;
+  }
+
+  Future<_RawHttpResponse> rawRequest(
+    String method,
+    Map<String, Object?> params, {
+    String? id,
+    Duration timeout = const Duration(seconds: 10),
+  }) {
+    return _send(
+      <String, Object?>{
+        'jsonrpc': '2.0',
+        if (id != null) 'id': id,
+        'method': method,
+        'params': params,
+      },
+      timeout: timeout,
+    );
+  }
+
+  Future<_RawHttpResponse> _send(
+    Map<String, Object?> payload, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final request = await httpClient.postUrl(endpoint);
+    request.headers.contentType = ContentType.json;
+    if (_sessionId != null) {
+      request.headers.set('MCP-Session-Id', _sessionId!);
+    }
+    if (_protocolVersion != null) {
+      request.headers.set('MCP-Protocol-Version', _protocolVersion!);
+    }
+    request.write(jsonEncode(payload));
+    final response = await request.close().timeout(timeout);
+    final body = await utf8.decoder.bind(response).join();
+    final sessionIdHeader = response.headers.value('MCP-Session-Id');
+    if (sessionIdHeader != null && sessionIdHeader.isNotEmpty) {
+      _sessionId = sessionIdHeader;
+    }
+    if (payload['method'] == 'initialize') {
+      _protocolVersion =
+          (_asMap(payload['params'])['protocolVersion'] as String?) ??
+          '2025-06-18';
+    }
+    return _RawHttpResponse(
+      statusCode: response.statusCode,
+      body: body,
+      headers: response.headers,
+    );
+  }
+
+  Future<void> close() async {
+    httpClient.close(force: true);
+    process.kill();
+    await process.exitCode.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () => 1,
+    );
   }
 }

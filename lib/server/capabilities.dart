@@ -5,6 +5,7 @@ import 'package:flutterhelm/version.dart';
 Map<String, Object?> buildServerCapabilities({
   required ToolRegistry toolRegistry,
   required FlutterHelmConfig config,
+  required String transportMode,
 }) {
   return <String, Object?>{
     'logging': <String, Object?>{},
@@ -36,6 +37,25 @@ Map<String, Object?> buildServerCapabilities({
         'pinnedArtifacts': true,
         'configProfiles': true,
         'compatibilityResource': 'config://compatibility/current',
+      },
+      'httpPreview': <String, Object?>{
+        'mode': 'preview',
+        'localhostOnly': true,
+        'rootsSupport': 'unsupported',
+        'sse': false,
+        'resumability': false,
+        'activeTransport': transportMode,
+      },
+      'adapterRegistry': const <String, Object?>{
+        'families': <String>[
+          'delegate',
+          'flutterCli',
+          'profiling',
+          'runtimeDriver',
+          'platformBridge',
+        ],
+        'customProviderKinds': <String>['stdio_json'],
+        'legacyConfigShim': true,
       },
     },
   };

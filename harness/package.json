@@ -16,6 +16,7 @@
     "bridge": "pnpm run build && pnpm run validate && pnpm run run -- --tag bridge",
     "interaction": "pnpm run build && pnpm run validate && pnpm run run -- --tag interaction",
     "hardening": "pnpm run build && pnpm run validate && pnpm run run -- --tag hardening",
+    "ecosystem": "pnpm run build && pnpm run validate && pnpm run run -- --tag ecosystem",
     "qa": "pnpm run build && pnpm run validate && pnpm run run -- --tag edge && pnpm run run -- --tag adversarial"
   },
   "devDependencies": {

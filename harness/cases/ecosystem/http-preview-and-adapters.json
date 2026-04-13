@@ -1,0 +1,16 @@
+{
+  "id": "http-preview-and-adapters",
+  "mode": "software",
+  "tags": ["ecosystem"],
+  "input": {
+    "checks": ["phase6-ecosystem-docs", "phase6-ecosystem-flow"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": [
+      "check:phase6-ecosystem-docs:ok",
+      "check:phase6-ecosystem-flow:ok",
+      "summary:http-preview-and-adapters"
+    ]
+  }
+}

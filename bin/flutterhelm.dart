@@ -8,6 +8,15 @@ ArgParser buildParser() {
     ..addOption('config', help: 'Override the config.yaml path.')
     ..addOption('state-dir', help: 'Override the mutable state directory.')
     ..addOption('profile', help: 'Select a named config profile overlay.')
+    ..addOption(
+      'transport',
+      help: 'Select the server transport.',
+      allowed: <String>['stdio', 'http'],
+      defaultsTo: 'stdio',
+    )
+    ..addOption('http-host', help: 'Bind host for HTTP preview.', defaultsTo: '127.0.0.1')
+    ..addOption('http-port', help: 'Bind port for HTTP preview.', defaultsTo: '0')
+    ..addOption('http-path', help: 'Request path for HTTP preview.', defaultsTo: '/mcp')
     ..addFlag(
       'allow-root-fallback',
       help: 'Allow workspace_set_root without client roots support.',
@@ -73,7 +82,16 @@ Future<void> main(List<String> arguments) async {
       logLevel: command['log-level'] as String,
       selectedProfile: selectedProfile,
     );
-    await server.run();
+    final transport = command['transport'] as String;
+    if (transport == 'http') {
+      await server.runHttpPreview(
+        host: command['http-host'] as String,
+        port: int.tryParse(command['http-port'] as String? ?? '0') ?? 0,
+        path: command['http-path'] as String? ?? '/mcp',
+      );
+    } else {
+      await server.runStdio();
+    }
   } on ConfigException catch (error) {
     stderr.writeln(error.message);
     exitCode = 78;

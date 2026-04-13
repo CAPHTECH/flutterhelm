@@ -33,6 +33,7 @@ mise exec -- pnpm -C harness profiling
 mise exec -- pnpm -C harness bridge
 mise exec -- pnpm -C harness interaction
 mise exec -- pnpm -C harness hardening
+mise exec -- pnpm -C harness ecosystem
 mise exec -- pnpm -C harness qa
 mise exec -- pnpm -C harness run -- --tag regression
 mise exec -- pnpm -C harness run -- --tag runtime
@@ -40,6 +41,7 @@ mise exec -- pnpm -C harness run -- --tag profiling
 mise exec -- pnpm -C harness run -- --tag bridge
 mise exec -- pnpm -C harness run -- --tag interaction
 mise exec -- pnpm -C harness run -- --tag hardening
+mise exec -- pnpm -C harness run -- --tag ecosystem
 mise exec -- pnpm -C harness report
 ```
 
@@ -60,7 +62,8 @@ mise exec -- pnpm -C harness report
 - `bridge`: iOS simulator で native handoff bundle を生成し、synthetic Android workspace でも handoff contract を確認
 - `interaction`: iOS simulator で opt-in runtime driver を有効にし、screenshot / semantic interaction / hot reload-restart / attached-session guard を確認
 - `hardening`: profile overlay / compatibility preflight / artifact pin lifecycle / busy rejection を確認
+- `ecosystem`: adapter registry visibility / custom `stdio_json` provider / localhost-only HTTP preview session flow を確認
 - `edge`: 実務でよく聞かれる設計質問
 - `adversarial`: 誤った前提に対する防御的回答
 
-`runtime`, `profiling`, `bridge`, `interaction` は macOS + Xcode simulator 前提のローカル専用チェックです。`hardening` は fake runtime driver と sample app fixture を使うため simulator は不要ですが、Dart/Flutter toolchain は必要です。
+`runtime`, `profiling`, `bridge`, `interaction` は macOS + Xcode simulator 前提のローカル専用チェックです。`hardening` と `ecosystem` は fake runtime driver / HTTP preview / sample app fixture を使うため simulator は不要ですが、Dart/Flutter toolchain は必要です。

@@ -127,6 +127,40 @@ class SafetyConfig {
   };
 }
 
+class AdapterProviderConfig {
+  const AdapterProviderConfig({
+    required this.id,
+    required this.kind,
+    required this.families,
+    this.command,
+    this.args = const <String>[],
+    this.startupTimeoutMs = 5000,
+    this.builtin = false,
+    this.options = const <String, Object?>{},
+  });
+
+  final String id;
+  final String kind;
+  final List<String> families;
+  final String? command;
+  final List<String> args;
+  final int startupTimeoutMs;
+  final bool builtin;
+  final Map<String, Object?> options;
+
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'kind': kind,
+      'families': families,
+      if (command != null) 'command': command,
+      if (args.isNotEmpty) 'args': args,
+      if (startupTimeoutMs > 0) 'startupTimeoutMs': startupTimeoutMs,
+      if (builtin) 'builtin': builtin,
+      if (options.isNotEmpty) 'options': options,
+    };
+  }
+}
+
 class AdaptersConfig {
   const AdaptersConfig({
     required this.delegateType,
@@ -136,6 +170,8 @@ class AdaptersConfig {
     required this.runtimeDriverCommand,
     required this.runtimeDriverArgs,
     required this.runtimeDriverStartupTimeoutMs,
+    required this.activeProviders,
+    required this.providers,
   });
 
   final String delegateType;
@@ -145,8 +181,82 @@ class AdaptersConfig {
   final String runtimeDriverCommand;
   final List<String> runtimeDriverArgs;
   final int runtimeDriverStartupTimeoutMs;
+  final Map<String, String> activeProviders;
+  final Map<String, AdapterProviderConfig> providers;
+
+  static const Map<String, String> defaultActiveProviders = <String, String>{
+    'delegate': 'builtin.delegate.workspace',
+    'flutterCli': 'builtin.flutter.cli',
+    'profiling': 'builtin.profiling.vm_service',
+    'runtimeDriver': 'builtin.runtime_driver.external_process',
+    'platformBridge': 'builtin.platform_bridge.handoff',
+  };
+
+  static Map<String, AdapterProviderConfig> defaultProviders({
+    required String delegateType,
+    required String flutterExecutable,
+    required bool dtdEnabled,
+    required bool runtimeDriverEnabled,
+    required String runtimeDriverCommand,
+    required List<String> runtimeDriverArgs,
+    required int runtimeDriverStartupTimeoutMs,
+  }) {
+    return <String, AdapterProviderConfig>{
+      'builtin.delegate.workspace': AdapterProviderConfig(
+        id: 'builtin.delegate.workspace',
+        kind: 'builtin',
+        families: const <String>['delegate'],
+        builtin: true,
+        options: <String, Object?>{'type': delegateType},
+      ),
+      'builtin.flutter.cli': AdapterProviderConfig(
+        id: 'builtin.flutter.cli',
+        kind: 'builtin',
+        families: const <String>['flutterCli'],
+        builtin: true,
+        options: <String, Object?>{
+          'executable': flutterExecutable,
+          'dtdEnabled': dtdEnabled,
+        },
+      ),
+      'builtin.profiling.vm_service': const AdapterProviderConfig(
+        id: 'builtin.profiling.vm_service',
+        kind: 'builtin',
+        families: <String>['profiling'],
+        builtin: true,
+      ),
+      'builtin.runtime_driver.external_process': AdapterProviderConfig(
+        id: 'builtin.runtime_driver.external_process',
+        kind: 'builtin',
+        families: const <String>['runtimeDriver'],
+        builtin: true,
+        command: runtimeDriverCommand,
+        args: runtimeDriverArgs,
+        startupTimeoutMs: runtimeDriverStartupTimeoutMs,
+        options: <String, Object?>{'enabled': runtimeDriverEnabled},
+      ),
+      'builtin.platform_bridge.handoff': const AdapterProviderConfig(
+        id: 'builtin.platform_bridge.handoff',
+        kind: 'builtin',
+        families: <String>['platformBridge'],
+        builtin: true,
+      ),
+    };
+  }
+
+  AdapterProviderConfig? providerForFamily(String family) {
+    final providerId = activeProviders[family];
+    if (providerId == null) {
+      return null;
+    }
+    return providers[providerId];
+  }
 
   Map<String, Object?> toJson() => <String, Object?>{
+    'active': activeProviders,
+    'providers': <String, Object?>{
+      for (final entry in providers.entries) entry.key: entry.value.toJson(),
+    },
     'delegate': <String, Object?>{'type': delegateType},
     'flutterCli': <String, Object?>{'executable': flutterExecutable},
     'dtd': <String, Object?>{'enabled': dtdEnabled},
@@ -195,14 +305,14 @@ class FlutterHelmConfig {
   ];
 
   factory FlutterHelmConfig.defaults() {
-    return const FlutterHelmConfig(
+    return FlutterHelmConfig(
       version: 1,
-      workspace: WorkspaceConfig(roots: <String>[]),
-      defaults: DefaultsConfig(target: 'lib/main.dart', mode: 'debug'),
+      workspace: const WorkspaceConfig(roots: <String>[]),
+      defaults: const DefaultsConfig(target: 'lib/main.dart', mode: 'debug'),
       enabledWorkflows: defaultWorkflows,
-      fallbacks: FallbacksConfig(allowRootFallback: false),
-      retention: RetentionConfig(heavyArtifactsDays: 7, metadataDays: 30),
-      safety: SafetyConfig(
+      fallbacks: const FallbacksConfig(allowRootFallback: false),
+      retention: const RetentionConfig(heavyArtifactsDays: 7, metadataDays: 30),
+      safety: const SafetyConfig(
         confirmBefore: <String>[
           'dependency_add',
           'dependency_remove',
@@ -222,6 +332,20 @@ class FlutterHelmConfig {
           '--stdio',
         ],
         runtimeDriverStartupTimeoutMs: 5000,
+        activeProviders: AdaptersConfig.defaultActiveProviders,
+        providers: AdaptersConfig.defaultProviders(
+          delegateType: 'dart_flutter_mcp',
+          flutterExecutable: 'flutter',
+          dtdEnabled: true,
+          runtimeDriverEnabled: false,
+          runtimeDriverCommand: 'npx',
+          runtimeDriverArgs: const <String>[
+            '-y',
+            '@mobilenext/mobile-mcp@latest',
+            '--stdio',
+          ],
+          runtimeDriverStartupTimeoutMs: 5000,
+        ),
       ),
     );
   }
@@ -260,6 +384,45 @@ class FlutterHelmConfig {
     final retention = _mapValue(resolvedRoot['retention']);
     final safety = _mapValue(resolvedRoot['safety']);
     final adapters = _mapValue(resolvedRoot['adapters']);
+    final delegateType =
+        _stringValue(_mapValue(adapters['delegate'])['type']) ??
+        'dart_flutter_mcp';
+    final flutterExecutable =
+        _stringValue(_mapValue(adapters['flutterCli'])['executable']) ??
+        'flutter';
+    final dtdEnabled = _boolValue(_mapValue(adapters['dtd'])['enabled']) ?? true;
+    final runtimeDriverEnabled =
+        _boolValue(_mapValue(adapters['runtimeDriver'])['enabled']) ?? false;
+    final runtimeDriverCommand =
+        _stringValue(_mapValue(adapters['runtimeDriver'])['command']) ?? 'npx';
+    final runtimeDriverArgs =
+        _stringList(_mapValue(adapters['runtimeDriver'])['args']) ??
+        const <String>[
+          '-y',
+          '@mobilenext/mobile-mcp@latest',
+          '--stdio',
+        ];
+    final runtimeDriverStartupTimeoutMs =
+        _intValue(_mapValue(adapters['runtimeDriver'])['startupTimeoutMs']) ??
+        5000;
+    final defaultProviders = AdaptersConfig.defaultProviders(
+      delegateType: delegateType,
+      flutterExecutable: flutterExecutable,
+      dtdEnabled: dtdEnabled,
+      runtimeDriverEnabled: runtimeDriverEnabled,
+      runtimeDriverCommand: runtimeDriverCommand,
+      runtimeDriverArgs: runtimeDriverArgs,
+      runtimeDriverStartupTimeoutMs: runtimeDriverStartupTimeoutMs,
+    );
+    final configuredProviders = _parseProviderConfigs(_mapValue(adapters['providers']));
+    final providers = <String, AdapterProviderConfig>{
+      ...defaultProviders,
+      ...configuredProviders,
+    };
+    final activeProviders = <String, String>{
+      ...AdaptersConfig.defaultActiveProviders,
+      ..._stringMap(_mapValue(adapters['active'])),
+    };
 
     return FlutterHelmConfig(
       version: version,
@@ -290,29 +453,15 @@ class FlutterHelmConfig {
             ],
       ),
       adapters: AdaptersConfig(
-        delegateType:
-            _stringValue(_mapValue(adapters['delegate'])['type']) ??
-            'dart_flutter_mcp',
-        flutterExecutable:
-            _stringValue(_mapValue(adapters['flutterCli'])['executable']) ??
-            'flutter',
-        dtdEnabled: _boolValue(_mapValue(adapters['dtd'])['enabled']) ?? true,
-        runtimeDriverEnabled:
-            _boolValue(_mapValue(adapters['runtimeDriver'])['enabled']) ??
-            false,
-        runtimeDriverCommand:
-            _stringValue(_mapValue(adapters['runtimeDriver'])['command']) ??
-            'npx',
-        runtimeDriverArgs:
-            _stringList(_mapValue(adapters['runtimeDriver'])['args']) ??
-            const <String>[
-              '-y',
-              '@mobilenext/mobile-mcp@latest',
-              '--stdio',
-            ],
-        runtimeDriverStartupTimeoutMs:
-            _intValue(_mapValue(adapters['runtimeDriver'])['startupTimeoutMs']) ??
-            5000,
+        delegateType: delegateType,
+        flutterExecutable: flutterExecutable,
+        dtdEnabled: dtdEnabled,
+        runtimeDriverEnabled: runtimeDriverEnabled,
+        runtimeDriverCommand: runtimeDriverCommand,
+        runtimeDriverArgs: runtimeDriverArgs,
+        runtimeDriverStartupTimeoutMs: runtimeDriverStartupTimeoutMs,
+        activeProviders: activeProviders,
+        providers: providers,
       ),
       activeProfile: selectedProfile,
       availableProfiles: availableProfiles,
@@ -455,6 +604,36 @@ Map<String, Map<String, Object?>> _mapOfMaps(Object? value) {
     mapped[entry.key] = _mapValue(entry.value);
   }
   return mapped;
+}
+
+Map<String, String> _stringMap(Map<String, Object?> value) {
+  return <String, String>{
+    for (final entry in value.entries)
+      if (entry.value is String && (entry.value as String).isNotEmpty)
+        entry.key: entry.value as String,
+  };
+}
+
+Map<String, AdapterProviderConfig> _parseProviderConfigs(
+  Map<String, Object?> rawProviders,
+) {
+  final providers = <String, AdapterProviderConfig>{};
+  for (final entry in rawProviders.entries) {
+    final provider = _mapValue(entry.value);
+    final kind = _stringValue(provider['kind']) ?? 'stdio_json';
+    final families = _stringList(provider['families']) ?? const <String>[];
+    providers[entry.key] = AdapterProviderConfig(
+      id: entry.key,
+      kind: kind,
+      families: families,
+      command: _stringValue(provider['command']),
+      args: _stringList(provider['args']) ?? const <String>[],
+      startupTimeoutMs: _intValue(provider['startupTimeoutMs']) ?? 5000,
+      builtin: _boolValue(provider['builtin']) ?? false,
+      options: _mapValue(provider['options']),
+    );
+  }
+  return providers;
 }
 
 String? _stringValue(Object? value) {

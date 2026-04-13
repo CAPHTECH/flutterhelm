@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutterhelm/adapters/registry.dart';
 import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/artifacts/pins.dart';
 import 'package:flutterhelm/artifacts/resources.dart';
@@ -69,6 +70,38 @@ class ApprovalCheckResult {
   final String? approvalRequestId;
 }
 
+enum TransportMode { stdio, http }
+
+extension on TransportMode {
+  String get wireName => switch (this) {
+    TransportMode.stdio => 'stdio',
+    TransportMode.http => 'http',
+  };
+}
+
+typedef ServerEmitter = void Function(Map<String, Object?> message);
+
+class ClientSessionContext {
+  ClientSessionContext({
+    required this.transportMode,
+    this.httpSessionId,
+  });
+
+  final TransportMode transportMode;
+  final String? httpSessionId;
+
+  bool initializeReceived = false;
+  bool clientInitialized = false;
+  bool clientSupportsRoots = false;
+  String protocolVersion = defaultProtocolVersion;
+  List<String>? cachedClientRoots;
+  int nextServerRequestId = 1;
+  final Map<String, Completer<Object?>> pendingResponses =
+      <String, Completer<Object?>>{};
+
+  bool get rootsTransportSupported => transportMode == TransportMode.stdio;
+}
+
 class FlutterHelmServer {
   FlutterHelmServer._({
     required this.runtimePaths,
@@ -82,6 +115,7 @@ class FlutterHelmServer {
     required this.resourceCatalog,
     required this.sessionStore,
     required this.processRunner,
+    required this.adapterRegistry,
     required this.workspaceTools,
     required this.hardeningTools,
     required this.operationCoordinator,
@@ -107,6 +141,7 @@ class FlutterHelmServer {
   final ResourceCatalog resourceCatalog;
   final SessionStore sessionStore;
   final ProcessRunner processRunner;
+  final AdapterRegistry adapterRegistry;
   final WorkspaceToolService workspaceTools;
   final HardeningToolService hardeningTools;
   final OperationCoordinator operationCoordinator;
@@ -119,14 +154,11 @@ class FlutterHelmServer {
   final String _logLevel;
 
   ServerState _state;
-  bool _initializeReceived = false;
-  bool _clientInitialized = false;
-  bool _clientSupportsRoots = false;
-  String _protocolVersion = defaultProtocolVersion;
-  List<String>? _cachedClientRoots;
-  int _nextServerRequestId = 1;
-  final Map<String, Completer<Object?>> _pendingResponses =
-      <String, Completer<Object?>>{};
+  final ClientSessionContext _stdioContext = ClientSessionContext(
+    transportMode: TransportMode.stdio,
+  );
+  final Map<String, ClientSessionContext> _httpSessions =
+      <String, ClientSessionContext>{};
 
   static Future<FlutterHelmServer> create({
     required RuntimePaths runtimePaths,
@@ -151,6 +183,10 @@ class FlutterHelmServer {
     final approvalStore = await ApprovalStore.create(stateDir: runtimePaths.stateDir);
     final sessionStore = await SessionStore.create(stateDir: runtimePaths.stateDir);
     final processRunner = const ProcessRunner();
+    final adapterRegistry = AdapterRegistry(
+      config: config,
+      processRunner: processRunner,
+    );
     final hardeningTools = HardeningToolService(
       artifactStore: artifactStore,
       pinStore: artifactPinStore,
@@ -161,10 +197,16 @@ class FlutterHelmServer {
       sessionStore: sessionStore,
       artifactStore: artifactStore,
       workflowEnabled: config.enabledWorkflows.contains('runtime_interaction'),
-      driverEnabled: config.adapters.runtimeDriverEnabled,
-      driverCommand: config.adapters.runtimeDriverCommand,
-      driverArgs: config.adapters.runtimeDriverArgs,
-      driverStartupTimeoutMs: config.adapters.runtimeDriverStartupTimeoutMs,
+      driverEnabled:
+          config.adapters.providerForFamily('runtimeDriver') != null &&
+          (config.adapters.providerForFamily('runtimeDriver')!.kind ==
+                  'stdio_json' ||
+              config.adapters.runtimeDriverEnabled),
+      driverConfigured: config.adapters.providerForFamily('runtimeDriver') != null,
+      driverBackend:
+          config.adapters.providerForFamily('runtimeDriver')?.kind ??
+          'builtin',
+      driverAdapter: await adapterRegistry.runtimeDriverAdapter(),
     );
 
     return FlutterHelmServer._(
@@ -184,13 +226,17 @@ class FlutterHelmServer {
         compatibilityBuilder: (
           FlutterHelmConfig config,
           ServerState state,
+          String transportMode,
         ) => hardeningTools.compatibilityCheck(
           config: config,
           activeRoot: state.activeRoot,
+          transportMode: transportMode,
         ),
+        adaptersBuilder: adapterRegistry.currentResource,
       ),
       sessionStore: sessionStore,
       processRunner: processRunner,
+      adapterRegistry: adapterRegistry,
       workspaceTools: WorkspaceToolService(
         processRunner: processRunner,
         artifactStore: artifactStore,
@@ -230,6 +276,10 @@ class FlutterHelmServer {
   }
 
   Future<void> run() async {
+    await runStdio();
+  }
+
+  Future<void> runStdio() async {
     final pendingOperations = <Future<void>>{};
 
     await for (final line
@@ -252,9 +302,10 @@ class FlutterHelmServer {
   Future<void> _dispatchLine(String line) async {
     try {
       final decoded = jsonDecode(line);
-      await _handleIncoming(decoded);
+      await _handleIncoming(decoded, _stdioContext, _emitToStdout);
     } on FormatException catch (error) {
       _sendProtocolError(
+        _emitToStdout,
         null,
         -32700,
         'Parse error',
@@ -265,14 +316,244 @@ class FlutterHelmServer {
       if (_logLevel == 'debug') {
         _log(stackTrace.toString());
       }
-      _sendProtocolError(null, -32603, 'Internal error');
+      _sendProtocolError(_emitToStdout, null, -32603, 'Internal error');
     }
   }
 
-  Future<void> _handleIncoming(Object? payload) async {
+  Future<void> runHttpPreview({
+    required String host,
+    required int port,
+    required String path,
+  }) async {
+    if (!_isLocalBindHost(host)) {
+      throw ConfigException(
+        'HTTP preview is localhost-only. Use 127.0.0.1, localhost, or ::1.',
+      );
+    }
+    final server = await HttpServer.bind(host, port);
+    final normalizedPath = path.startsWith('/') ? path : '/$path';
+    stderr.writeln(
+      'HTTP preview listening on http://${server.address.host}:${server.port}$normalizedPath',
+    );
+    await for (final request in server) {
+      unawaited(_handleHttpRequest(request, normalizedPath));
+    }
+  }
+
+  Future<void> _handleHttpRequest(HttpRequest request, String path) async {
+    if (request.uri.path != path) {
+      request.response.statusCode = HttpStatus.notFound;
+      await request.response.close();
+      return;
+    }
+
+    final origin = request.headers.value('Origin');
+    if (origin != null && !_isLocalOrigin(origin)) {
+      await _writeHttpError(
+        request,
+        statusCode: HttpStatus.forbidden,
+        code: 'HTTP_PREVIEW_INVALID_ORIGIN',
+        message: 'HTTP preview only accepts localhost origins.',
+      );
+      return;
+    }
+
+    switch (request.method.toUpperCase()) {
+      case 'POST':
+        await _handleHttpPost(request);
+        return;
+      case 'DELETE':
+        await _handleHttpDelete(request);
+        return;
+      case 'GET':
+        request.response.statusCode = HttpStatus.methodNotAllowed;
+        request.response.headers.set(HttpHeaders.allowHeader, 'POST, DELETE');
+        await request.response.close();
+        return;
+      default:
+        request.response.statusCode = HttpStatus.methodNotAllowed;
+        request.response.headers.set(HttpHeaders.allowHeader, 'POST, DELETE');
+        await request.response.close();
+        return;
+    }
+  }
+
+  Future<void> _handleHttpPost(HttpRequest request) async {
+    final body = await utf8.decoder.bind(request).join();
+    late final Object? payload;
+    try {
+      payload = body.trim().isEmpty ? null : jsonDecode(body);
+    } on FormatException catch (error) {
+      await _writeHttpError(
+        request,
+        statusCode: HttpStatus.badRequest,
+        code: 'PARSE_ERROR',
+        message: error.message,
+      );
+      return;
+    }
+
+    final sessionId = request.headers.value('MCP-Session-Id');
+    ClientSessionContext? context;
+    var createdSession = false;
+    if (sessionId != null && sessionId.isNotEmpty) {
+      context = _httpSessions[sessionId];
+      if (context == null) {
+        await _writeHttpError(
+          request,
+          statusCode: HttpStatus.notFound,
+          code: 'HTTP_PREVIEW_SESSION_REQUIRED',
+          message: 'Unknown HTTP preview session: $sessionId',
+        );
+        return;
+      }
+      final protocolHeader = request.headers.value('MCP-Protocol-Version');
+      if (!context.initializeReceived ||
+          protocolHeader == null ||
+          !supportedProtocolVersions.contains(protocolHeader)) {
+        await _writeHttpError(
+          request,
+          statusCode: HttpStatus.badRequest,
+          code: 'HTTP_PREVIEW_SESSION_REQUIRED',
+          message:
+              'Initialized HTTP preview requests require MCP-Protocol-Version.',
+        );
+        return;
+      }
+    } else {
+      if (!_payloadContainsMethod(payload, 'initialize')) {
+        await _writeHttpError(
+          request,
+          statusCode: HttpStatus.badRequest,
+          code: 'HTTP_PREVIEW_SESSION_REQUIRED',
+          message: 'HTTP preview requires initialize before other requests.',
+        );
+        return;
+      }
+      final newSessionId = _generateHttpSessionId();
+      context = ClientSessionContext(
+        transportMode: TransportMode.http,
+        httpSessionId: newSessionId,
+      );
+      _httpSessions[newSessionId] = context;
+      createdSession = true;
+    }
+
+    final responses = <Map<String, Object?>>[];
+    try {
+      await _handleIncoming(
+        payload,
+        context,
+        (Map<String, Object?> message) => responses.add(message),
+      );
+    } catch (error) {
+      if (createdSession && context.httpSessionId != null) {
+        _httpSessions.remove(context.httpSessionId);
+      }
+      await _writeHttpError(
+        request,
+        statusCode: HttpStatus.internalServerError,
+        code: 'INTERNAL_ERROR',
+        message: error.toString(),
+      );
+      return;
+    }
+
+    if (context.httpSessionId != null) {
+      request.response.headers.set('MCP-Session-Id', context.httpSessionId!);
+    }
+    request.response.headers.contentType = ContentType.json;
+    if (responses.isEmpty) {
+      request.response.statusCode = HttpStatus.accepted;
+      await request.response.close();
+      return;
+    }
+    final envelope = responses.length == 1 ? responses.single : responses;
+    request.response.statusCode = HttpStatus.ok;
+    request.response.write(jsonEncode(envelope));
+    await request.response.close();
+  }
+
+  Future<void> _handleHttpDelete(HttpRequest request) async {
+    final sessionId = request.headers.value('MCP-Session-Id');
+    if (sessionId == null || sessionId.isEmpty) {
+      await _writeHttpError(
+        request,
+        statusCode: HttpStatus.badRequest,
+        code: 'HTTP_PREVIEW_SESSION_REQUIRED',
+        message: 'DELETE requires MCP-Session-Id.',
+      );
+      return;
+    }
+    final removed = _httpSessions.remove(sessionId);
+    if (removed == null) {
+      await _writeHttpError(
+        request,
+        statusCode: HttpStatus.notFound,
+        code: 'HTTP_PREVIEW_SESSION_REQUIRED',
+        message: 'Unknown HTTP preview session: $sessionId',
+      );
+      return;
+    }
+    request.response.statusCode = HttpStatus.noContent;
+    await request.response.close();
+  }
+
+  Future<void> _writeHttpError(
+    HttpRequest request, {
+    required int statusCode,
+    required String code,
+    required String message,
+  }) async {
+    request.response.statusCode = statusCode;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(
+      jsonEncode(<String, Object?>{
+        'error': <String, Object?>{
+          'code': code,
+          'message': message,
+        },
+      }),
+    );
+    await request.response.close();
+  }
+
+  bool _payloadContainsMethod(Object? payload, String method) {
+    if (payload is List) {
+      for (final item in payload) {
+        if (_payloadContainsMethod(item, method)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    final map = _asMap(payload);
+    return map['method'] == method;
+  }
+
+  bool _isLocalOrigin(String origin) {
+    final uri = Uri.tryParse(origin);
+    final host = uri?.host ?? origin;
+    return host == 'localhost' || host == '127.0.0.1' || host == '::1';
+  }
+
+  bool _isLocalBindHost(String host) {
+    return host == 'localhost' || host == '127.0.0.1' || host == '::1';
+  }
+
+  String _generateHttpSessionId() {
+    final micros = DateTime.now().toUtc().microsecondsSinceEpoch;
+    return 'http_${micros.toRadixString(36)}';
+  }
+
+  Future<void> _handleIncoming(
+    Object? payload,
+    ClientSessionContext context,
+    ServerEmitter emit,
+  ) async {
     if (payload is List<Object?>) {
       for (final item in payload) {
-        unawaited(_handleIncoming(item));
+        await _handleIncoming(item, context, emit);
       }
       return;
     }
@@ -285,15 +566,15 @@ class FlutterHelmServer {
     final id = payload['id'];
     if (method is String) {
       if (id == null) {
-        await _handleNotification(method, _asMap(payload['params']));
+        await _handleNotification(context, method, _asMap(payload['params']));
         return;
       }
-      await _handleRequest(id, method, _asMap(payload['params']));
+      await _handleRequest(context, emit, id, method, _asMap(payload['params']));
       return;
     }
 
     if (payload.containsKey('id')) {
-      _handleResponse(id, payload['result'], payload['error']);
+      _handleResponse(context, id, payload['result'], payload['error']);
       return;
     }
 
@@ -301,15 +582,16 @@ class FlutterHelmServer {
   }
 
   Future<void> _handleNotification(
+    ClientSessionContext context,
     String method,
     Map<String, Object?> params,
   ) async {
     switch (method) {
       case 'notifications/initialized':
-        _clientInitialized = true;
+        context.clientInitialized = true;
         return;
       case 'notifications/roots/list_changed':
-        _cachedClientRoots = null;
+        context.cachedClientRoots = null;
         return;
       default:
         return;
@@ -317,6 +599,8 @@ class FlutterHelmServer {
   }
 
   Future<void> _handleRequest(
+    ClientSessionContext context,
+    ServerEmitter emit,
     Object id,
     String method,
     Map<String, Object?> params,
@@ -326,8 +610,8 @@ class FlutterHelmServer {
     try {
       switch (method) {
         case 'initialize':
-          final result = _handleInitialize(params);
-          _sendResult(id, result);
+          final result = _handleInitialize(context, params);
+          _sendResult(emit, id, result);
           await _recordAudit(
             method: method,
             riskClass: RiskClass.readOnly,
@@ -336,7 +620,7 @@ class FlutterHelmServer {
           );
           return;
         case 'ping':
-          _sendResult(id, <String, Object?>{});
+          _sendResult(emit, id, <String, Object?>{});
           await _recordAudit(
             method: method,
             riskClass: RiskClass.readOnly,
@@ -345,8 +629,8 @@ class FlutterHelmServer {
           );
           return;
         case 'logging/setLevel':
-          _ensureInitialized();
-          _sendResult(id, <String, Object?>{});
+          _ensureInitialized(context);
+          _sendResult(emit, id, <String, Object?>{});
           await _recordAudit(
             method: method,
             riskClass: RiskClass.readOnly,
@@ -355,8 +639,8 @@ class FlutterHelmServer {
           );
           return;
         case 'tools/list':
-          _ensureInitialized();
-          _sendResult(id, <String, Object?>{
+          _ensureInitialized(context);
+          _sendResult(emit, id, <String, Object?>{
             'tools': toolRegistry
                 .publicDefinitions(config)
                 .map((ToolDefinition tool) => tool.toMcpTool())
@@ -370,15 +654,20 @@ class FlutterHelmServer {
           );
           return;
         case 'tools/call':
-          _ensureInitialized();
+          _ensureInitialized(context);
           final toolName = _requiredString(params['name'], 'name');
           final arguments = _asMap(params['arguments']);
           final definition = toolRegistry.byName(toolName);
           if (definition == null) {
             throw FlutterHelmProtocolError(-32602, 'Unknown tool: $toolName');
           }
-          final toolResult = await _executeTool(definition, arguments);
-          _sendResult(id, toolResult.response);
+          final toolResult = await _executeTool(
+            context,
+            emit,
+            definition,
+            arguments,
+          );
+          _sendResult(emit, id, toolResult.response);
           for (final audit in toolResult.audits) {
             await _recordAudit(
               method: method,
@@ -395,8 +684,8 @@ class FlutterHelmServer {
           }
           return;
         case 'resources/list':
-          _ensureInitialized();
-          final rootsSnapshot = await _currentRootSnapshot();
+          _ensureInitialized(context);
+          final rootsSnapshot = await _currentRootSnapshot(context, emit);
           final listedResources = await resourceCatalog.listResources(
             config: config,
             state: _state,
@@ -406,7 +695,7 @@ class FlutterHelmServer {
           final resources = listedResources
               .map((ResourceDescriptor resource) => resource.toJson())
               .toList();
-          _sendResult(id, <String, Object?>{'resources': resources});
+          _sendResult(emit, id, <String, Object?>{'resources': resources});
           await _recordAudit(
             method: method,
             riskClass: RiskClass.readOnly,
@@ -415,9 +704,9 @@ class FlutterHelmServer {
           );
           return;
         case 'resources/read':
-          _ensureInitialized();
+          _ensureInitialized(context);
           final uri = _requiredString(params['uri'], 'uri');
-          final rootsSnapshot = await _currentRootSnapshot();
+          final rootsSnapshot = await _currentRootSnapshot(context, emit);
           final sessionId = _sessionIdFromUri(uri);
           final session = sessionId == null
               ? null
@@ -428,8 +717,10 @@ class FlutterHelmServer {
             state: _state,
             rootSnapshot: rootsSnapshot,
             session: session,
+            transportMode: context.transportMode.wireName,
+            rootsTransportSupported: context.rootsTransportSupported,
           );
-          _sendResult(id, resource.toJson());
+          _sendResult(emit, id, resource.toJson());
           await _recordAudit(
             method: method,
             riskClass: RiskClass.readOnly,
@@ -443,7 +734,7 @@ class FlutterHelmServer {
           throw FlutterHelmProtocolError(-32601, 'Method not found: $method');
       }
     } on FlutterHelmProtocolError catch (error) {
-      _sendProtocolError(id, error.code, error.message, data: error.data);
+      _sendProtocolError(emit, id, error.code, error.message, data: error.data);
       await _recordAudit(
         method: method,
         riskClass: RiskClass.readOnly,
@@ -453,7 +744,7 @@ class FlutterHelmServer {
       );
     } catch (error, stackTrace) {
       if (error is FlutterHelmToolError) {
-        _sendResult(id, _toolErrorResponse(error));
+        _sendResult(emit, id, _toolErrorResponse(error));
         await _recordAudit(
           method: method,
           riskClass: RiskClass.readOnly,
@@ -468,7 +759,7 @@ class FlutterHelmServer {
       if (_logLevel == 'debug') {
         _log(stackTrace.toString());
       }
-      _sendProtocolError(id, -32603, 'Internal error');
+      _sendProtocolError(emit, id, -32603, 'Internal error');
       await _recordAudit(
         method: method,
         riskClass: RiskClass.readOnly,
@@ -479,22 +770,28 @@ class FlutterHelmServer {
     }
   }
 
-  Map<String, Object?> _handleInitialize(Map<String, Object?> params) {
+  Map<String, Object?> _handleInitialize(
+    ClientSessionContext context,
+    Map<String, Object?> params,
+  ) {
     final clientVersion = _requiredString(
       params['protocolVersion'],
       'protocolVersion',
     );
-    _clientSupportsRoots = _asMap(params['capabilities'])['roots'] is Map;
-    _protocolVersion = supportedProtocolVersions.contains(clientVersion)
+    context.clientSupportsRoots =
+        context.rootsTransportSupported &&
+        _asMap(params['capabilities'])['roots'] is Map;
+    context.protocolVersion = supportedProtocolVersions.contains(clientVersion)
         ? clientVersion
         : defaultProtocolVersion;
-    _initializeReceived = true;
+    context.initializeReceived = true;
 
     return <String, Object?>{
-      'protocolVersion': _protocolVersion,
+      'protocolVersion': context.protocolVersion,
       'capabilities': buildServerCapabilities(
         toolRegistry: toolRegistry,
         config: config,
+        transportMode: context.transportMode.wireName,
       ),
       'serverInfo': <String, Object?>{
         'name': flutterHelmName,
@@ -507,6 +804,8 @@ class FlutterHelmServer {
   }
 
   Future<ToolExecutionResult> _executeTool(
+    ClientSessionContext context,
+    ServerEmitter emit,
     ToolDefinition definition,
     Map<String, Object?> arguments,
   ) async {
@@ -517,7 +816,7 @@ class FlutterHelmServer {
     try {
       switch (definition.name) {
         case 'workspace_discover':
-          final snapshot = await _currentRootSnapshot();
+          final snapshot = await _currentRootSnapshot(context, emit);
           final roots = <String>{
             ...snapshot.clientRoots,
             ...snapshot.configuredRoots,
@@ -531,37 +830,48 @@ class FlutterHelmServer {
             structuredContent: <String, Object?>{'workspaces': workspaces},
           );
         case 'workspace_show':
-          final snapshot = await _currentRootSnapshot();
+          final snapshot = await _currentRootSnapshot(context, emit);
           final resources = await resourceCatalog.listResources(
             config: config,
             state: _state,
             rootSnapshot: snapshot,
             sessions: sessionStore.listActiveSessions(),
           );
+          final activeAdapters = await adapterRegistry.activeAdaptersSummary();
           final structuredContent = <String, Object?>{
             'rootsMode': snapshot.mode.wireName,
             'clientRoots': snapshot.clientRoots,
             'configuredRoots': snapshot.configuredRoots,
             'activeRoot': _state.activeRoot,
+            'transportMode': context.transportMode.wireName,
+            'httpPreview': context.transportMode == TransportMode.http,
+            'rootsTransportSupport': context.rootsTransportSupported
+                ? 'supported'
+                : 'unsupported',
             'activeProfile': config.activeProfile,
             'availableProfiles': config.availableProfiles,
             'defaults': config.defaults.toJson(),
             'configuredWorkflows': config.enabledWorkflows,
             'implementedWorkflows': _implementedWorkflows(),
+            'activeAdapters': activeAdapters,
             'profilingBackend': 'vm_service',
             'profilingOwnershipPolicy': 'owned_only',
             'platformBridgeMode': 'handoff_only',
             'platformBridgeSupportedPlatforms': const <String>['ios', 'android'],
-            'runtimeInteractionBackend': 'external_adapter',
+            'runtimeInteractionBackend':
+                config.adapters.providerForFamily('runtimeDriver')?.kind ??
+                'builtin',
             'runtimeInteractionDefaultEnabled': false,
             'screenshotWorkflow': 'runtime_readonly',
             'hotOpsOwnershipPolicy': 'owned_only',
+            'adaptersResource': 'config://adapters/current',
             'compatibilityResource': 'config://compatibility/current',
             'resources': resources
                 .where(
                   (ResourceDescriptor resource) =>
                       resource.uri == 'config://workspace/current' ||
                       resource.uri == 'config://workspace/defaults' ||
+                      resource.uri == 'config://adapters/current' ||
                       resource.uri == 'config://compatibility/current',
                 )
                 .map((ResourceDescriptor resource) => resource.toJson())
@@ -579,6 +889,7 @@ class FlutterHelmServer {
                   (ResourceDescriptor resource) =>
                       resource.uri == 'config://workspace/current' ||
                       resource.uri == 'config://workspace/defaults' ||
+                      resource.uri == 'config://adapters/current' ||
                       resource.uri == 'config://compatibility/current',
                 )
                 .map((ResourceDescriptor resource) => resource.toResourceLink())
@@ -590,6 +901,7 @@ class FlutterHelmServer {
             profile: requestedProfile,
             config: requestedProfile == null ? config : null,
             activeRoot: _state.activeRoot,
+            transportMode: context.transportMode.wireName,
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -606,8 +918,28 @@ class FlutterHelmServer {
                   ]
                 : const <Map<String, Object?>>[],
           );
+        case 'adapter_list':
+          final family = arguments['family'] as String?;
+          final adapters = await adapterRegistry.list(family: family);
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: family == null
+                ? '${adapters.length} adapter family entries resolved.'
+                : 'Adapter family $family resolved.',
+            structuredContent: <String, Object?>{
+              'adapters': adapters,
+              'resource': 'config://adapters/current',
+            },
+            resourceLinks: <Map<String, Object?>>[
+              _resourceLink(
+                uri: 'config://adapters/current',
+                mimeType: 'application/json',
+                title: 'Current adapter registry state',
+              ),
+            ],
+          );
         case 'workspace_set_root':
-          final clientRoots = await _getClientRoots();
+          final clientRoots = await _getClientRoots(context, emit);
           final requestedRoot = _requiredString(
             arguments['workspaceRoot'],
             'workspaceRoot',
@@ -641,7 +973,7 @@ class FlutterHelmServer {
               updatedAt: DateTime.now().toUtc(),
             ),
           );
-          final snapshot = await _currentRootSnapshot();
+          final snapshot = await _currentRootSnapshot(context, emit);
           final resources = await resourceCatalog.listResources(
             config: config,
             state: _state,
@@ -671,6 +1003,8 @@ class FlutterHelmServer {
           );
         case 'analyze_project':
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            context,
+            emit,
             arguments['workspaceRoot'] as String?,
           );
           final analysis = await _withWorkspaceLock(
@@ -691,6 +1025,8 @@ class FlutterHelmServer {
           );
         case 'resolve_symbol':
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            context,
+            emit,
             arguments['workspaceRoot'] as String?,
           );
           final symbol = _requiredString(arguments['symbol'], 'symbol');
@@ -709,6 +1045,8 @@ class FlutterHelmServer {
           );
         case 'format_files':
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            context,
+            emit,
             arguments['workspaceRoot'] as String?,
           );
           final paths = _asStringList(arguments['paths']);
@@ -739,6 +1077,8 @@ class FlutterHelmServer {
           );
         case 'dependency_add':
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            context,
+            emit,
             arguments['workspaceRoot'] as String?,
           );
           final addApproval = await _checkApproval(
@@ -780,6 +1120,8 @@ class FlutterHelmServer {
           );
         case 'dependency_remove':
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            context,
+            emit,
             arguments['workspaceRoot'] as String?,
           );
           final removeApproval = await _checkApproval(
@@ -818,7 +1160,7 @@ class FlutterHelmServer {
             ],
           );
         case 'session_open':
-          final clientRoots = await _getClientRoots();
+          final clientRoots = await _getClientRoots(context, emit);
           final workspaceRootArgument = arguments['workspaceRoot'] as String?;
           currentWorkspaceRoot = workspaceRootArgument != null
               ? await rootPolicy.validateWorkspaceRoot(
@@ -847,7 +1189,7 @@ class FlutterHelmServer {
           final resources = await resourceCatalog.listResources(
             config: config,
             state: _state,
-            rootSnapshot: await _currentRootSnapshot(),
+            rootSnapshot: await _currentRootSnapshot(context, emit),
             sessions: sessionStore.listActiveSessions(),
           );
           final descriptor = resources.firstWhere(
@@ -949,6 +1291,8 @@ class FlutterHelmServer {
           );
         case 'run_app':
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            context,
+            emit,
             arguments['workspaceRoot'] as String?,
           );
           final target = (arguments['target'] as String?) ?? config.defaults.target;
@@ -1005,6 +1349,8 @@ class FlutterHelmServer {
           );
         case 'attach_app':
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            context,
+            emit,
             arguments['workspaceRoot'] as String?,
           );
           final attached = await launcherTools.attachApp(
@@ -1391,6 +1737,8 @@ class FlutterHelmServer {
           );
         case 'run_unit_tests':
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            context,
+            emit,
             arguments['workspaceRoot'] as String?,
           );
           final unitTests = await _withWorkspaceLock(
@@ -1411,6 +1759,8 @@ class FlutterHelmServer {
           );
         case 'run_widget_tests':
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            context,
+            emit,
             arguments['workspaceRoot'] as String?,
           );
           final widgetTests = await _withWorkspaceLock(
@@ -1431,6 +1781,8 @@ class FlutterHelmServer {
           );
         case 'run_integration_tests':
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            context,
+            emit,
             arguments['workspaceRoot'] as String?,
           );
           final platform = _requiredString(arguments['platform'], 'platform');
@@ -1524,8 +1876,11 @@ class FlutterHelmServer {
     );
   }
 
-  Future<RootSnapshot> _currentRootSnapshot() async {
-    final clientRoots = await _getClientRoots();
+  Future<RootSnapshot> _currentRootSnapshot(
+    ClientSessionContext context,
+    ServerEmitter emit,
+  ) async {
+    final clientRoots = await _getClientRoots(context, emit);
     return rootPolicy.buildSnapshot(
       clientRoots: clientRoots,
       configuredRoots: config.workspace.roots,
@@ -1533,21 +1888,24 @@ class FlutterHelmServer {
     );
   }
 
-  Future<List<String>> _getClientRoots() async {
-    if (!_clientSupportsRoots) {
+  Future<List<String>> _getClientRoots(
+    ClientSessionContext context,
+    ServerEmitter emit,
+  ) async {
+    if (!context.clientSupportsRoots || !context.rootsTransportSupported) {
       return const <String>[];
     }
-    if (_cachedClientRoots != null) {
-      return _cachedClientRoots!;
+    if (context.cachedClientRoots != null) {
+      return context.cachedClientRoots!;
     }
-    if (!_clientInitialized) {
+    if (!context.clientInitialized) {
       return const <String>[];
     }
 
-    final requestId = 'server-${_nextServerRequestId++}';
+    final requestId = 'server-${context.nextServerRequestId++}';
     final completer = Completer<Object?>();
-    _pendingResponses[requestId] = completer;
-    _send(<String, Object?>{
+    context.pendingResponses[requestId] = completer;
+    emit(<String, Object?>{
       'jsonrpc': '2.0',
       'id': requestId,
       'method': 'roots/list',
@@ -1564,7 +1922,7 @@ class FlutterHelmServer {
           .whereType<String>()
           .map((String uri) => Uri.parse(uri).toFilePath())
           .toList();
-      _cachedClientRoots = roots;
+      context.cachedClientRoots = roots;
       return roots;
     } on TimeoutException {
       throw FlutterHelmToolError(
@@ -1574,16 +1932,21 @@ class FlutterHelmServer {
         retryable: true,
       );
     } finally {
-      _pendingResponses.remove(requestId);
+      context.pendingResponses.remove(requestId);
     }
   }
 
-  void _handleResponse(Object? id, Object? result, Object? error) {
+  void _handleResponse(
+    ClientSessionContext context,
+    Object? id,
+    Object? result,
+    Object? error,
+  ) {
     final key = id?.toString();
     if (key == null) {
       return;
     }
-    final completer = _pendingResponses[key];
+    final completer = context.pendingResponses[key];
     if (completer == null || completer.isCompleted) {
       return;
     }
@@ -1618,13 +1981,17 @@ class FlutterHelmServer {
     return activeRoot;
   }
 
-  Future<String> _resolveWorkspaceRoot(String? workspaceRootArgument) async {
+  Future<String> _resolveWorkspaceRoot(
+    ClientSessionContext context,
+    ServerEmitter emit,
+    String? workspaceRootArgument,
+  ) async {
     if (workspaceRootArgument == null || workspaceRootArgument.isEmpty) {
       return _requireActiveRoot();
     }
     return rootPolicy.validateWorkspaceRoot(
       requestedRoot: workspaceRootArgument,
-      clientRoots: await _getClientRoots(),
+      clientRoots: await _getClientRoots(context, emit),
     );
   }
 
@@ -1670,8 +2037,8 @@ class FlutterHelmServer {
     return _asList(value).whereType<String>().toList();
   }
 
-  void _ensureInitialized() {
-    if (!_initializeReceived) {
+  void _ensureInitialized(ClientSessionContext context) {
+    if (!context.initializeReceived) {
       throw FlutterHelmProtocolError(-32002, 'Server not initialized.');
     }
   }
@@ -1935,17 +2302,22 @@ class FlutterHelmServer {
     return normalized;
   }
 
-  void _sendResult(Object id, Map<String, Object?> result) {
-    _send(<String, Object?>{'jsonrpc': '2.0', 'id': id, 'result': result});
+  void _sendResult(
+    ServerEmitter emit,
+    Object id,
+    Map<String, Object?> result,
+  ) {
+    emit(<String, Object?>{'jsonrpc': '2.0', 'id': id, 'result': result});
   }
 
   void _sendProtocolError(
+    ServerEmitter emit,
     Object? id,
     int code,
     String message, {
     Map<String, Object?>? data,
   }) {
-    _send(<String, Object?>{
+    emit(<String, Object?>{
       'jsonrpc': '2.0',
       'id': id,
       'error': <String, Object?>{
@@ -1956,7 +2328,7 @@ class FlutterHelmServer {
     });
   }
 
-  void _send(Map<String, Object?> message) {
+  void _emitToStdout(Map<String, Object?> message) {
     stdout.writeln(jsonEncode(message));
   }
 

@@ -15,7 +15,9 @@ typedef CompatibilityPayloadBuilder =
     Future<Map<String, Object?>> Function(
       FlutterHelmConfig config,
       ServerState state,
+      String transportMode,
     );
+typedef AdaptersPayloadBuilder = Future<Map<String, Object?>> Function();
 
 class ResourceDescriptor {
   const ResourceDescriptor({
@@ -109,6 +111,7 @@ class ResourceCatalog {
     required this.sessionAppStateBuilder,
     required this.pinsIndexBuilder,
     required this.compatibilityBuilder,
+    required this.adaptersBuilder,
   });
 
   final ArtifactStore artifactStore;
@@ -116,6 +119,7 @@ class ResourceCatalog {
   final SessionAppStatePayloadBuilder sessionAppStateBuilder;
   final JsonResourcePayloadBuilder pinsIndexBuilder;
   final CompatibilityPayloadBuilder compatibilityBuilder;
+  final AdaptersPayloadBuilder adaptersBuilder;
 
   Future<List<ResourceDescriptor>> listResources({
     required FlutterHelmConfig config,
@@ -126,6 +130,7 @@ class ResourceCatalog {
     final resources = <ResourceDescriptor>[
       _workspaceCurrentDescriptor(state),
       _workspaceDefaultsDescriptor(config),
+      _adaptersDescriptor(),
       _artifactPinsDescriptor(),
       _compatibilityDescriptor(),
       ...sessions.map(_sessionSummaryDescriptor),
@@ -147,6 +152,8 @@ class ResourceCatalog {
     required ServerState state,
     required RootSnapshot rootSnapshot,
     required SessionRecord? session,
+    required String transportMode,
+    required bool rootsTransportSupported,
   }) async {
     if (uri == 'config://workspace/current') {
       return ResourceReadResult(
@@ -156,6 +163,12 @@ class ResourceCatalog {
           ...rootSnapshot.toJson(),
           'activeProfile': config.activeProfile,
           'availableProfiles': config.availableProfiles,
+          'transportMode': transportMode,
+          'httpPreview': transportMode == 'http',
+          'rootsTransportSupport': rootsTransportSupported
+              ? 'supported'
+              : 'unsupported',
+          'adaptersResource': 'config://adapters/current',
           'compatibilityResource': 'config://compatibility/current',
           'updatedAt': state.updatedAt?.toUtc().toIso8601String(),
         }),
@@ -178,11 +191,21 @@ class ResourceCatalog {
       );
     }
 
+    if (uri == 'config://adapters/current') {
+      return ResourceReadResult(
+        uri: uri,
+        mimeType: 'application/json',
+        text: jsonEncode(await adaptersBuilder()),
+      );
+    }
+
     if (uri == 'config://compatibility/current') {
       return ResourceReadResult(
         uri: uri,
         mimeType: 'application/json',
-        text: jsonEncode(await compatibilityBuilder(config, state)),
+        text: jsonEncode(
+          await compatibilityBuilder(config, state, transportMode),
+        ),
       );
     }
 
@@ -282,6 +305,19 @@ class ResourceCatalog {
       name: 'artifacts.pins',
       title: 'Pinned artifacts index',
       description: 'Pinned file-backed artifact resources.',
+      mimeType: 'application/json',
+      createdAt: now,
+      lastModified: now,
+    );
+  }
+
+  ResourceDescriptor _adaptersDescriptor() {
+    final now = DateTime.now().toUtc();
+    return ResourceDescriptor(
+      uri: 'config://adapters/current',
+      name: 'adapters.current',
+      title: 'Current adapter registry state',
+      description: 'Active provider selection and provider health by family.',
       mimeType: 'application/json',
       createdAt: now,
       lastModified: now,

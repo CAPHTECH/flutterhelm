@@ -42,7 +42,9 @@ type CheckName =
   | "phase4-platform-bridge-flow"
   | "phase5-runtime-interaction-flow"
   | "phase6-hardening-docs"
-  | "phase6-hardening-flow";
+  | "phase6-hardening-flow"
+  | "phase6-ecosystem-docs"
+  | "phase6-ecosystem-flow";
 
 interface ContractCaseInput {
   checks?: CheckName[];
@@ -216,6 +218,197 @@ class Phase0HarnessClient {
 
   private send(payload: Record<string, unknown>): void {
     this.child.stdin?.write(`${JSON.stringify(payload)}\n`);
+  }
+}
+
+interface RawHttpHarnessResponse {
+  statusCode: number;
+  body: string;
+  headers: Record<string, string>;
+}
+
+class HttpPreviewHarnessClient {
+  private sessionId: string | null = null;
+  private protocolVersion: string | null = null;
+  private nextRequestId = 1;
+  private closed = false;
+
+  private constructor(
+    private readonly child: ReturnType<typeof spawn>,
+    private readonly endpoint: string,
+  ) {}
+
+  static async start(
+    repoRoot: string,
+    stateDir: string,
+    options: { allowRootFallback?: boolean; configPath?: string; profile?: string } = {},
+  ): Promise<HttpPreviewHarnessClient> {
+    const child = spawn(
+      "mise",
+      [
+        "exec",
+        "--",
+        "dart",
+        "run",
+        "bin/flutterhelm.dart",
+        "serve",
+        "--transport",
+        "http",
+        "--http-host",
+        "127.0.0.1",
+        "--http-port",
+        "0",
+        "--http-path",
+        "/mcp",
+        "--state-dir",
+        stateDir,
+        ...(options.configPath ? ["--config", options.configPath] : []),
+        ...(options.profile ? ["--profile", options.profile] : []),
+        ...(options.allowRootFallback ? ["--allow-root-fallback"] : []),
+      ],
+      {
+        cwd: repoRoot,
+        env: process.env,
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
+
+    let stderrLog = "";
+    const endpoint = await new Promise<string>((resolveEndpoint, rejectEndpoint) => {
+      const timeout = setTimeout(() => {
+        rejectEndpoint(new Error(stderrLog.trim() || "Timed out waiting for HTTP preview endpoint."));
+      }, 20000);
+      const reader = createInterface({ input: child.stderr! });
+      reader.on("line", (line) => {
+        stderrLog += `${line}\n`;
+        const marker = "HTTP preview listening on ";
+        const index = line.indexOf(marker);
+        if (index < 0) {
+          return;
+        }
+        clearTimeout(timeout);
+        resolveEndpoint(line.slice(index + marker.length).trim());
+      });
+      child.once("close", (code) => {
+        clearTimeout(timeout);
+        rejectEndpoint(
+          new Error(stderrLog.trim() || `FlutterHelm HTTP preview exited with code ${code ?? 1}`),
+        );
+      });
+    });
+
+    return new HttpPreviewHarnessClient(child, endpoint);
+  }
+
+  async initialize(): Promise<Record<string, unknown>> {
+    return this.request("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: {
+        name: "flutterhelm-harness-http",
+        version: "0.1.0",
+      },
+    });
+  }
+
+  async request(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    const id = `http-${this.nextRequestId++}`;
+    const raw = await this.rawRequest(method, params, { id });
+    if (raw.statusCode !== 200) {
+      throw new Error(`HTTP request failed with status ${raw.statusCode}: ${raw.body}`);
+    }
+    const decoded = JSON.parse(raw.body) as Record<string, unknown>;
+    if (decoded.error) {
+      throw new Error(JSON.stringify(decoded.error));
+    }
+    return requireObject(decoded.result, `${method}.result`);
+  }
+
+  async rawRequest(
+    method: string,
+    params: Record<string, unknown> = {},
+    options: { id?: string } = {},
+  ): Promise<RawHttpHarnessResponse> {
+    const payload: Record<string, unknown> = {
+      jsonrpc: "2.0",
+      method,
+      params,
+    };
+    if (options.id) {
+      payload.id = options.id;
+    }
+    return this.send(payload);
+  }
+
+  async getStatusCode(): Promise<number> {
+    const response = await fetch(this.endpoint, { method: "GET" });
+    await response.text();
+    return response.status;
+  }
+
+  async deleteSession(): Promise<number> {
+    const headers: Record<string, string> = {};
+    if (this.sessionId) {
+      headers["MCP-Session-Id"] = this.sessionId;
+    }
+    const response = await fetch(this.endpoint, {
+      method: "DELETE",
+      headers,
+    });
+    await response.text();
+    return response.status;
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.child.kill("SIGTERM");
+    await new Promise<void>((resolveClose) => {
+      this.child.once("close", () => resolveClose());
+      setTimeout(() => {
+        if (!this.child.killed) {
+          this.child.kill("SIGKILL");
+        }
+      }, 3000);
+    });
+  }
+
+  private async send(payload: Record<string, unknown>): Promise<RawHttpHarnessResponse> {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
+    if (this.sessionId) {
+      headers["MCP-Session-Id"] = this.sessionId;
+    }
+    if (this.protocolVersion) {
+      headers["MCP-Protocol-Version"] = this.protocolVersion;
+    }
+
+    const response = await fetch(this.endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+    const body = await response.text();
+    const nextSessionId = response.headers.get("MCP-Session-Id");
+    if (nextSessionId) {
+      this.sessionId = nextSessionId;
+    }
+    if (payload.method === "initialize") {
+      const params = requireObject(payload.params, "initialize.params");
+      this.protocolVersion = requireString(params.protocolVersion, "initialize.params.protocolVersion");
+    }
+    const responseHeaders: Record<string, string> = {};
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value;
+    });
+    return {
+      statusCode: response.status,
+      body,
+      headers: responseHeaders,
+    };
   }
 }
 
@@ -425,6 +618,11 @@ async function checkPhase0ToolExposure(repoRoot: string): Promise<void> {
       .map((tool) => requireString(tool.name, "tool.name"))
       .sort();
     const expectedTools = [
+      "adapter_list",
+      "artifact_pin",
+      "artifact_pin_list",
+      "artifact_unpin",
+      "compatibility_check",
       "session_list",
       "session_open",
       "workspace_set_root",
@@ -438,7 +636,13 @@ async function checkPhase0ToolExposure(repoRoot: string): Promise<void> {
     const resources = requireArray(resourcesList.resources, "resources/list.resources")
       .map((resource) => requireObject(resource, "resource"))
       .map((resource) => requireString(resource.uri, "resource.uri"));
-    for (const expected of ["config://workspace/current", "config://workspace/defaults"]) {
+    for (const expected of [
+      "config://workspace/current",
+      "config://workspace/defaults",
+      "config://artifacts/pins",
+      "config://adapters/current",
+      "config://compatibility/current",
+    ]) {
       if (!resources.includes(expected)) {
         throw new Error(`resources/list is missing ${expected}`);
       }
@@ -652,6 +856,40 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
     ) {
       throw new Error(`Unexpected hardening capability metadata: ${JSON.stringify(hardening)}`);
     }
+    const httpPreview = requireObject(
+      experimental.httpPreview,
+      "capabilities.experimental.httpPreview",
+    );
+    if (
+      httpPreview.mode !== "preview"
+      || httpPreview.localhostOnly !== true
+      || httpPreview.rootsSupport !== "unsupported"
+      || httpPreview.sse !== false
+      || httpPreview.resumability !== false
+      || httpPreview.activeTransport !== "stdio"
+    ) {
+      throw new Error(`Unexpected HTTP preview capability metadata: ${JSON.stringify(httpPreview)}`);
+    }
+    const adapterRegistry = requireObject(
+      experimental.adapterRegistry,
+      "capabilities.experimental.adapterRegistry",
+    );
+    const adapterFamilies = requireArray(
+      adapterRegistry.families,
+      "capabilities.experimental.adapterRegistry.families",
+    );
+    for (const family of ["delegate", "flutterCli", "profiling", "runtimeDriver", "platformBridge"]) {
+      if (!adapterFamilies.includes(family)) {
+        throw new Error(`adapterRegistry.families is missing ${family}`);
+      }
+    }
+    const customProviderKinds = requireArray(
+      adapterRegistry.customProviderKinds,
+      "capabilities.experimental.adapterRegistry.customProviderKinds",
+    );
+    if (!customProviderKinds.includes("stdio_json") || adapterRegistry.legacyConfigShim !== true) {
+      throw new Error(`Unexpected adapter registry capability metadata: ${JSON.stringify(adapterRegistry)}`);
+    }
 
     const toolsList = await client.request("tools/list");
     const tools = requireArray(toolsList.tools, "tools/list.tools")
@@ -661,6 +899,7 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
     const expectedTools = [
       "analyze_project",
       "attach_app",
+      "adapter_list",
       "artifact_pin",
       "artifact_pin_list",
       "artifact_unpin",
@@ -1589,7 +1828,6 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "README.md",
     [
-      "Phase 6 hardening core started",
       "`compatibility_check`",
       "`artifact_pin`",
       "`artifact_unpin`",
@@ -1605,7 +1843,6 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "docs/07-roadmap.md",
     [
-      "Phase 6 の Sprint 8 hardening core",
       "concurrency handling",
       "pinned artifacts",
       "config profiles",
@@ -1648,6 +1885,7 @@ async function checkPhase6HardeningFlow(repoRoot: string): Promise<void> {
         "config://workspace/current",
         "config://workspace/defaults",
         "config://artifacts/pins",
+        "config://adapters/current",
         "config://compatibility/current",
       ]) {
         if (!resourceUris.includes(expected)) {
@@ -1678,6 +1916,9 @@ async function checkPhase6HardeningFlow(repoRoot: string): Promise<void> {
       ) as Record<string, unknown>;
       if (workspaceDecoded.activeProfile !== "interactive") {
         throw new Error(`config://workspace/current activeProfile mismatch: ${JSON.stringify(workspaceDecoded)}`);
+      }
+      if (workspaceDecoded.adaptersResource !== "config://adapters/current") {
+        throw new Error(`config://workspace/current adaptersResource mismatch: ${JSON.stringify(workspaceDecoded)}`);
       }
 
       const compatibility = await client.callTool("compatibility_check");
@@ -1830,6 +2071,320 @@ profiles:
   );
 }
 
+async function checkPhase6EcosystemDocs(repoRoot: string): Promise<void> {
+  await checkRequiredStrings(
+    repoRoot,
+    "README.md",
+    [
+      "`adapter_list`",
+      "`config://adapters/current`",
+      "`--transport http`",
+      "`--http-host`",
+      "`--http-port`",
+      "`--http-path`",
+      "localhost-only",
+      "`stdio_json`",
+    ],
+    "README ecosystem preview",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/04-mcp-contract.md",
+    [
+      "adapter registry",
+      "custom provider kind は `stdio_json`",
+      "localhost-only の Streamable HTTP preview",
+      "`adapter_list`",
+      "`experimental.httpPreview.mode = preview`",
+      "`experimental.adapterRegistry.customProviderKinds = [\"stdio_json\"]`",
+    ],
+    "MCP contract ecosystem preview",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/07-roadmap.md",
+    [
+      "Sprint 9",
+      "Streamable HTTP preview",
+      "extension / plugin point for custom adapters",
+      "adapter registry / custom `stdio_json` provider / `adapter_list` / `config://adapters/current`",
+    ],
+    "Roadmap Sprint 9",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/09-implementation-plan.md",
+    [
+      "### Sprint 9",
+      "transport-agnostic core",
+      "`config://adapters/current`",
+      "`adapter_list`",
+      "`stdio_json`",
+      "`--transport http`",
+      "localhost-only Streamable HTTP preview",
+    ],
+    "Implementation plan Sprint 9",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/adrs/ADR-002-transport-roots.md",
+    [
+      "Sprint 9 update",
+      "primary transport は引き続き `stdio`",
+      "HTTP preview では Roots transport を扱わず",
+    ],
+    "ADR-002 Sprint 9 update",
+  );
+}
+
+async function checkPhase6EcosystemFlow(repoRoot: string): Promise<void> {
+  const sampleFixture = await createSampleAppFixture(repoRoot);
+  const pubGet = await runCommandCapture(
+    "flutter",
+    ["pub", "get"],
+    sampleFixture.workspaceRoot,
+  );
+  if (pubGet.exitCode !== 0) {
+    await rm(sampleFixture.sandboxDir, { recursive: true, force: true });
+    throw new Error(pubGet.stderr || pubGet.stdout || "flutter pub get failed for ecosystem fixture");
+  }
+  const configPath = resolve(sampleFixture.sandboxDir, "ecosystem-config.yaml");
+  await writeFile(
+    configPath,
+    `version: 1
+workspace:
+  roots:
+    - ${JSON.stringify(sampleFixture.workspaceRoot)}
+defaults:
+  target: lib/main.dart
+  mode: debug
+enabledWorkflows:
+  - workspace
+  - session
+  - launcher
+  - runtime_readonly
+  - tests
+  - profiling
+  - platform_bridge
+  - runtime_interaction
+fallbacks:
+  allowRootFallback: false
+retention:
+  heavyArtifactsDays: 7
+  metadataDays: 30
+adapters:
+  active:
+    runtimeDriver: test.runtimeDriver.fake
+  providers:
+    test.runtimeDriver.fake:
+      kind: stdio_json
+      families:
+        - runtimeDriver
+      command: dart
+      args:
+        - run
+        - tool/fake_stdio_adapter_provider.dart
+      startupTimeoutMs: 5000
+`,
+  );
+  const sampleClient = await Phase0HarnessClient.start(
+    repoRoot,
+    sampleFixture.stateDir,
+    [sampleFixture.workspaceRoot],
+    { configPath },
+  );
+  try {
+    await sampleClient.initialize();
+    await sampleClient.callTool("workspace_set_root", {
+      workspaceRoot: sampleFixture.workspaceRoot,
+    });
+
+    const adaptersList = await sampleClient.callTool("adapter_list", {
+      family: "runtimeDriver",
+    });
+    const adaptersStructured = requireObject(
+      adaptersList.structuredContent,
+      "adapter_list.structuredContent",
+    );
+    const adapters = requireArray(adaptersStructured.adapters, "adapter_list.adapters")
+      .map((value) => requireObject(value, "adapter family"));
+    if (adapters.length !== 1) {
+      throw new Error(`adapter_list(family=runtimeDriver) returned ${adapters.length} entries`);
+    }
+    const runtimeDriver = adapters[0];
+    if (
+      runtimeDriver.family !== "runtimeDriver"
+      || runtimeDriver.activeProviderId !== "test.runtimeDriver.fake"
+      || runtimeDriver.kind !== "stdio_json"
+      || runtimeDriver.healthy !== true
+    ) {
+      throw new Error(`Unexpected runtimeDriver adapter entry: ${JSON.stringify(runtimeDriver)}`);
+    }
+    const operations = requireArray(runtimeDriver.operations, "runtimeDriver.operations");
+    for (const operation of ["list_elements", "tap", "enter_text", "scroll_until_visible", "capture_screenshot"]) {
+      if (!operations.includes(operation)) {
+        throw new Error(`runtimeDriver.operations is missing ${operation}`);
+      }
+    }
+
+    const adaptersResource = await sampleClient.request("resources/read", {
+      uri: "config://adapters/current",
+    });
+    const adaptersContents = requireArray(
+      adaptersResource.contents,
+      "config://adapters/current contents",
+    );
+    const adaptersBody = requireObject(
+      adaptersContents[0],
+      "config://adapters/current body",
+    );
+    const adaptersDecoded = JSON.parse(
+      requireString(adaptersBody.text, "config://adapters/current text"),
+    ) as Record<string, unknown>;
+    const active = requireObject(adaptersDecoded.active, "config://adapters/current active");
+    if (active.runtimeDriver !== "test.runtimeDriver.fake") {
+      throw new Error(`config://adapters/current runtimeDriver mismatch: ${JSON.stringify(adaptersDecoded)}`);
+    }
+    const providers = requireObject(adaptersDecoded.providers, "config://adapters/current providers");
+    if (!("test.runtimeDriver.fake" in providers)) {
+      throw new Error("config://adapters/current is missing test.runtimeDriver.fake");
+    }
+  } finally {
+    await sampleClient.close();
+    await rm(sampleFixture.sandboxDir, { recursive: true, force: true });
+  }
+
+  const fixture = await createPhase0Fixture();
+  const client = await HttpPreviewHarnessClient.start(
+    repoRoot,
+    fixture.stateDir,
+    { allowRootFallback: true },
+  );
+  try {
+    const initialize = await client.initialize();
+    const serverInfo = requireObject(initialize.serverInfo, "http initialize.serverInfo");
+    if (serverInfo.name !== "flutterhelm") {
+      throw new Error(`HTTP initialize returned unexpected serverInfo: ${JSON.stringify(serverInfo)}`);
+    }
+
+    const tools = await client.request("tools/list");
+    const toolNames = requireArray(tools.tools, "http tools/list.tools")
+      .map((value) => requireObject(value, "tool"))
+      .map((value) => requireString(value.name, "tool.name"));
+    if (!toolNames.includes("adapter_list")) {
+      throw new Error("HTTP tools/list is missing adapter_list");
+    }
+
+    const workspaceShow = await client.request("tools/call", {
+      name: "workspace_show",
+      arguments: {},
+    });
+    const workspaceStructured = requireObject(
+      workspaceShow.structuredContent,
+      "HTTP workspace_show.structuredContent",
+    );
+    if (
+      workspaceStructured.transportMode !== "http"
+      || workspaceStructured.httpPreview !== true
+      || workspaceStructured.rootsTransportSupport !== "unsupported"
+    ) {
+      throw new Error(`Unexpected HTTP workspace_show payload: ${JSON.stringify(workspaceStructured)}`);
+    }
+
+    const compatibility = await client.request("tools/call", {
+      name: "compatibility_check",
+      arguments: {},
+    });
+    const compatibilityStructured = requireObject(
+      compatibility.structuredContent,
+      "HTTP compatibility_check.structuredContent",
+    );
+    const transport = requireObject(compatibilityStructured.transport, "compatibility.transport");
+    const httpPreview = requireObject(transport.httpPreview, "compatibility.transport.httpPreview");
+    if (httpPreview.status !== "degraded") {
+      throw new Error(`HTTP compatibility httpPreview mismatch: ${JSON.stringify(httpPreview)}`);
+    }
+
+    const resourcesList = await client.request("resources/list");
+    const resourceUris = requireArray(resourcesList.resources, "http resources/list.resources")
+      .map((value) => requireObject(value, "resource"))
+      .map((value) => requireString(value.uri, "resource.uri"));
+    for (const expected of [
+      "config://workspace/current",
+      "config://workspace/defaults",
+      "config://adapters/current",
+      "config://compatibility/current",
+    ]) {
+      if (!resourceUris.includes(expected)) {
+        throw new Error(`HTTP resources/list is missing ${expected}`);
+      }
+    }
+
+    const approvalRequired = await client.request("tools/call", {
+      name: "workspace_set_root",
+      arguments: {
+        workspaceRoot: fixture.workspaceRoot,
+      },
+    });
+    const approvalStructured = requireObject(
+      approvalRequired.structuredContent,
+      "HTTP workspace_set_root approval",
+    );
+    if (approvalStructured.status !== "approval_required") {
+      throw new Error(`HTTP fallback workspace_set_root should require approval: ${JSON.stringify(approvalStructured)}`);
+    }
+    const approvalToken = requireString(
+      approvalStructured.approvalRequestId,
+      "HTTP workspace_set_root.approvalRequestId",
+    );
+    const approved = await client.request("tools/call", {
+      name: "workspace_set_root",
+      arguments: {
+        workspaceRoot: fixture.workspaceRoot,
+        approvalToken,
+      },
+    });
+    const approvedStructured = requireObject(
+      approved.structuredContent,
+      "HTTP workspace_set_root approved",
+    );
+    const activeRoot = await realpath(requireString(approvedStructured.activeRoot, "HTTP approved activeRoot"));
+    if (activeRoot !== fixture.workspaceRoot) {
+      throw new Error(`HTTP workspace_set_root returned unexpected activeRoot ${String(approvedStructured.activeRoot)}`);
+    }
+
+    const workspaceCurrent = await client.request("resources/read", {
+      uri: "config://workspace/current",
+    });
+    const workspaceCurrentContents = requireArray(workspaceCurrent.contents, "HTTP workspace/current contents");
+    const workspaceCurrentBody = requireObject(workspaceCurrentContents[0], "HTTP workspace/current body");
+    const workspaceCurrentDecoded = JSON.parse(
+      requireString(workspaceCurrentBody.text, "HTTP workspace/current text"),
+    ) as Record<string, unknown>;
+    if (workspaceCurrentDecoded.transportMode !== "http") {
+      throw new Error(`HTTP workspace/current transportMode mismatch: ${JSON.stringify(workspaceCurrentDecoded)}`);
+    }
+
+    const getStatus = await client.getStatusCode();
+    if (getStatus !== 405) {
+      throw new Error(`HTTP preview GET expected 405, got ${getStatus}`);
+    }
+
+    const deleteStatus = await client.deleteSession();
+    if (deleteStatus !== 204) {
+      throw new Error(`HTTP preview DELETE expected 204, got ${deleteStatus}`);
+    }
+
+    const postDelete = await client.rawRequest("ping", {}, { id: "after-delete" });
+    if (postDelete.statusCode !== 404) {
+      throw new Error(`HTTP preview expected 404 after deleting session, got ${postDelete.statusCode}`);
+    }
+  } finally {
+    await client.close();
+    await rm(fixture.sandboxDir, { recursive: true, force: true });
+  }
+}
+
 async function checkMkDocsBuild(repoRoot: string, harnessRoot: string): Promise<void> {
   const docsPython = resolveDocsPython(harnessRoot);
   if (!(await pathExists(docsPython))) {
@@ -1931,6 +2486,7 @@ async function checkToolRiskCatalog(repoRoot: string): Promise<void> {
   const markdown = await readRepoText(repoRoot, "docs/04-mcp-contract.md");
   const requiredChecks = [
     { heading: "## 4.1 workspace", tool: "compatibility_check", risk: "read_only" },
+    { heading: "## 4.1 workspace", tool: "adapter_list", risk: "read_only" },
     { heading: "## 4.1 workspace", tool: "dependency_add", risk: "project_mutation" },
     { heading: "## 4.1 workspace", tool: "dependency_remove", risk: "project_mutation" },
     { heading: "## 4.2 session", tool: "artifact_pin", risk: "bounded_mutation" },
@@ -2086,6 +2642,7 @@ async function checkResourceUriContract(repoRoot: string): Promise<void> {
     "session://<session-id>/health",
     "config://workspace/current",
     "config://workspace/defaults",
+    "config://adapters/current",
     "config://artifacts/pins",
     "config://compatibility/current",
     "log://<session-id>/stdout",
@@ -2231,6 +2788,8 @@ const CHECKS: Record<CheckName, (repoRoot: string, harnessRoot: string) => Promi
   "phase5-runtime-interaction-flow": (repoRoot) => checkPhase5RuntimeInteractionFlow(repoRoot),
   "phase6-hardening-docs": (repoRoot) => checkPhase6HardeningDocs(repoRoot),
   "phase6-hardening-flow": (repoRoot) => checkPhase6HardeningFlow(repoRoot),
+  "phase6-ecosystem-docs": (repoRoot) => checkPhase6EcosystemDocs(repoRoot),
+  "phase6-ecosystem-flow": (repoRoot) => checkPhase6EcosystemFlow(repoRoot),
 };
 
 async function main(): Promise<void> {
