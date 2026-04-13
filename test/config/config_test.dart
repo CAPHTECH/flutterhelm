@@ -81,8 +81,9 @@ fallbacks:
       expect(config.fallbacks.allowRootFallback, isTrue);
     });
 
-    test('normalizes legacy adapters into the registry shape', () {
-      final config = FlutterHelmConfig.fromYamlText('''
+    test('rejects removed legacy adapter config fields', () {
+      expect(
+        () => FlutterHelmConfig.fromYamlText('''
 version: 1
 adapters:
   delegate:
@@ -97,26 +98,14 @@ adapters:
       - "@mobilenext/mobile-mcp@latest"
       - --stdio
     startupTimeoutMs: 8000
-''');
-
-      expect(
-        config.adapters.activeProviders['runtimeDriver'],
-        'builtin.runtime_driver.external_process',
-      );
-      final provider = config.adapters.providerForFamily('runtimeDriver');
-      expect(provider, isNotNull);
-      expect(provider!.kind, 'builtin');
-      expect(provider.command, 'npx');
-      expect(provider.args, contains('--stdio'));
-      expect(provider.options['enabled'], isTrue);
-      expect(config.adapters.deprecations, isNotEmpty);
-      expect(
-        config.adapters.deprecations.map((entry) => entry['field']),
-        containsAll(<String?>[
-          'adapters.delegate',
-          'adapters.flutterCli',
-          'adapters.runtimeDriver',
-        ]),
+'''),
+        throwsA(
+          isA<ConfigException>().having(
+            (ConfigException error) => error.message,
+            'message',
+            contains('Legacy adapter config fields are no longer supported'),
+          ),
+        ),
       );
     });
 

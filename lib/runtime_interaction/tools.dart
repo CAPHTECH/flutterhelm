@@ -280,6 +280,14 @@ class RuntimeInteractionToolService {
       );
     }
 
+    final bytes = await File(targetPath).readAsBytes();
+    await artifactStore.writeSessionScreenshot(
+      sessionId: session.sessionId,
+      captureId: captureId,
+      format: normalizedFormat,
+      bytes: bytes,
+    );
+
     return <String, Object?>{
       'sessionId': session.sessionId,
       'status': 'completed',

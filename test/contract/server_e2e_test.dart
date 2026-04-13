@@ -994,13 +994,33 @@ profiles:
       - platform_bridge
       - runtime_interaction
     adapters:
-      runtimeDriver:
-        enabled: true
-        command: ${Platform.resolvedExecutable}
-        args:
-          - run
-          - tool/fake_runtime_driver.dart
-        startupTimeoutMs: 15000
+      active:
+        runtimeDriver: builtin.runtime_driver.external_process
+      providers:
+        builtin.runtime_driver.external_process:
+          kind: builtin
+          families:
+            - runtimeDriver
+          command: ${Platform.resolvedExecutable}
+          args:
+            - run
+            - tool/fake_runtime_driver.dart
+          startupTimeoutMs: 15000
+          options:
+            enabled: true
+adapters:
+  providers:
+    builtin.runtime_driver.external_process:
+      kind: builtin
+      families:
+        - runtimeDriver
+      command: ${Platform.resolvedExecutable}
+      args:
+        - run
+        - tool/fake_runtime_driver.dart
+      startupTimeoutMs: 15000
+      options:
+        enabled: false
 ''',
       );
       final client = await _TestMcpClient.start(
@@ -1020,11 +1040,28 @@ profiles:
       });
       final workspaceStructured =
           workspaceShow['structuredContent'] as Map<Object?, Object?>;
+      expect(workspaceStructured['releaseChannel'], 'stable');
       expect(workspaceStructured['activeProfile'], 'interactive');
       expect(
         (workspaceStructured['availableProfiles'] as List<Object?>)
             .contains('interactive'),
         isTrue,
+      );
+      expect(
+        (workspaceStructured['stableHarnessTags'] as List<Object?>).contains('runtime'),
+        isTrue,
+      );
+      final workspaceSupportLevels =
+          workspaceStructured['supportLevels'] as Map<Object?, Object?>;
+      final transportSupport =
+          workspaceSupportLevels['transport'] as Map<Object?, Object?>;
+      expect(
+        (transportSupport['stdio'] as Map<Object?, Object?>)['supportLevel'],
+        'stable',
+      );
+      expect(
+        (transportSupport['http'] as Map<Object?, Object?>)['supportLevel'],
+        'preview',
       );
 
       final workspaceCurrent = await client.request('resources/read', <String, Object?>{
@@ -1035,7 +1072,16 @@ profiles:
               as Map<Object?, Object?>;
       final workspaceCurrentDecoded =
           jsonDecode(workspaceCurrentBody['text'] as String) as Map<String, Object?>;
+      expect(workspaceCurrentDecoded['releaseChannel'], 'stable');
       expect(workspaceCurrentDecoded['activeProfile'], 'interactive');
+      expect(
+        workspaceCurrentDecoded['artifactsStatusResource'],
+        'config://artifacts/status',
+      );
+      expect(
+        workspaceCurrentDecoded['observabilityResource'],
+        'config://observability/current',
+      );
 
       final compatibility = await client.request('tools/call', <String, Object?>{
         'name': 'compatibility_check',
@@ -1044,11 +1090,14 @@ profiles:
       expect(compatibility['isError'], isFalse);
       final compatibilityStructured =
           compatibility['structuredContent'] as Map<Object?, Object?>;
+      expect(compatibilityStructured['releaseChannel'], 'stable');
       final workflows =
           compatibilityStructured['workflows'] as Map<Object?, Object?>;
       final runtimeInteraction =
           workflows['runtime_interaction'] as Map<Object?, Object?>;
       expect(runtimeInteraction['configured'], isTrue);
+      expect(runtimeInteraction['supportLevel'], 'beta');
+      expect(runtimeInteraction['includedInStableLane'], isFalse);
 
       final compatibilityResource = await client.request(
         'resources/read',
@@ -1060,7 +1109,32 @@ profiles:
       final compatibilityDecoded =
           jsonDecode(compatibilityResourceBody['text'] as String)
               as Map<String, Object?>;
+      expect(compatibilityDecoded['releaseChannel'], 'stable');
       expect(compatibilityDecoded['profile'], 'interactive');
+
+      final artifactStatusResource = await client.request(
+        'resources/read',
+        <String, Object?>{'uri': 'config://artifacts/status'},
+      );
+      final artifactStatusBody =
+          (artifactStatusResource['contents'] as List<Object?>).single
+              as Map<Object?, Object?>;
+      final artifactStatusDecoded =
+          jsonDecode(artifactStatusBody['text'] as String)
+              as Map<String, Object?>;
+      expect(artifactStatusDecoded['capacityBytes'], isA<int>());
+
+      final observabilityResource = await client.request(
+        'resources/read',
+        <String, Object?>{'uri': 'config://observability/current'},
+      );
+      final observabilityBody =
+          (observabilityResource['contents'] as List<Object?>).single
+              as Map<Object?, Object?>;
+      final observabilityDecoded =
+          jsonDecode(observabilityBody['text'] as String)
+              as Map<String, Object?>;
+      expect(observabilityDecoded['transport'], isA<Map<String, Object?>>());
 
       final attached = await client.request('tools/call', <String, Object?>{
         'name': 'attach_app',
@@ -1199,13 +1273,20 @@ enabledWorkflows:
   - platform_bridge
   - tests
 adapters:
-  runtimeDriver:
-    enabled: true
-    command: ${Platform.resolvedExecutable}
-    args:
-      - run
-      - tool/fake_runtime_driver.dart
-    startupTimeoutMs: 15000
+  active:
+    runtimeDriver: builtin.runtime_driver.external_process
+  providers:
+    builtin.runtime_driver.external_process:
+      kind: builtin
+      families:
+        - runtimeDriver
+      command: ${Platform.resolvedExecutable}
+      args:
+        - run
+        - tool/fake_runtime_driver.dart
+      startupTimeoutMs: 15000
+      options:
+        enabled: true
 ''',
         );
         final client = await _TestMcpClient.start(
@@ -1378,9 +1459,21 @@ enabledWorkflows:
   - platform_bridge
   - tests
 adapters:
-  runtimeDriver:
-    enabled: true
-    startupTimeoutMs: 15000
+  active:
+    runtimeDriver: builtin.runtime_driver.external_process
+  providers:
+    builtin.runtime_driver.external_process:
+      kind: builtin
+      families:
+        - runtimeDriver
+      command: npx
+      args:
+        - -y
+        - "@mobilenext/mobile-mcp@latest"
+        - --stdio
+      startupTimeoutMs: 15000
+      options:
+        enabled: true
 ''',
         );
         final client = await _TestMcpClient.start(

@@ -31,6 +31,7 @@ void main() {
         retention: const RetentionConfig(
           heavyArtifactsDays: 1,
           metadataDays: 30,
+          maxArtifactBytes: 1024,
         ),
         pinnedUris: <String>{store.sessionScreenshotUri('sess_1', 'shot_1', 'png')},
       );
@@ -38,6 +39,49 @@ void main() {
       expect(result['removedCount'], 1);
       expect(await pinnedFile.exists(), isTrue);
       expect(await staleFile.exists(), isFalse);
+    });
+
+    test('evicts oldest unpinned artifacts when capacity is exceeded', () async {
+      final sandbox = await Directory.systemTemp.createTemp('flutterhelm-artifacts');
+      addTearDown(() => sandbox.delete(recursive: true));
+
+      final store = ArtifactStore(stateDir: sandbox.path);
+      await store.writeSessionScreenshot(
+        sessionId: 'sess_capacity',
+        captureId: 'old',
+        format: 'png',
+        bytes: List<int>.filled(700, 1),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await store.writeSessionScreenshot(
+        sessionId: 'sess_capacity',
+        captureId: 'new',
+        format: 'png',
+        bytes: List<int>.filled(700, 2),
+      );
+
+      final result = await store.sweepRetention(
+        retention: const RetentionConfig(
+          heavyArtifactsDays: 30,
+          metadataDays: 30,
+          maxArtifactBytes: 900,
+        ),
+        pinnedUris: const <String>{},
+      );
+
+      expect(result['capacityRemovedCount'], 1);
+      expect(
+        await store.storedResourceExists(
+          store.sessionScreenshotUri('sess_capacity', 'old', 'png'),
+        ),
+        isFalse,
+      );
+      expect(
+        await store.storedResourceExists(
+          store.sessionScreenshotUri('sess_capacity', 'new', 'png'),
+        ),
+        isTrue,
+      );
     });
   });
 }

@@ -6,7 +6,9 @@ import 'package:flutterhelm/adapters/registry.dart';
 import 'package:flutterhelm/artifacts/pins.dart';
 import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/config/config.dart';
+import 'package:flutterhelm/observability/store.dart';
 import 'package:flutterhelm/server/errors.dart';
+import 'package:flutterhelm/server/support_levels.dart';
 import 'package:flutterhelm/utils/process_runner.dart';
 import 'package:path/path.dart' as p;
 
@@ -16,12 +18,14 @@ class HardeningToolService {
     required this.pinStore,
     required this.processRunner,
     required this.configRepository,
+    required this.observability,
   });
 
   final ArtifactStore artifactStore;
   final ArtifactPinStore pinStore;
   final ProcessRunner processRunner;
   final ConfigRepository configRepository;
+  final ObservabilityStore observability;
 
   Future<Map<String, Object?>> artifactPin({
     required String uri,
@@ -99,6 +103,20 @@ class HardeningToolService {
       'pins': pins,
       'count': pins.length,
     };
+  }
+
+  Future<Map<String, Object?>> artifactStatus({
+    FlutterHelmConfig? config,
+  }) async {
+    final resolvedConfig = config ?? await configRepository.load();
+    return artifactStore.artifactStatus(
+      retention: resolvedConfig.retention,
+      pinnedUris: pinStore.pinnedUris,
+    );
+  }
+
+  Future<Map<String, Object?>> observabilitySnapshot() async {
+    return observability.snapshot();
   }
 
   Future<Map<String, Object?>> compatibilityCheck({
@@ -183,6 +201,8 @@ class HardeningToolService {
             'runtimeDriver.enabled must be true.',
           '$runtimeDriverCommand must be available on PATH.',
         ],
+        supportLevel: SupportLevel.beta,
+        includedInStableLane: false,
         extra: <String, Object?>{
           'providerId': runtimeDriverProvider?.id,
           'kind': runtimeDriverProvider?.kind,
@@ -281,12 +301,16 @@ class HardeningToolService {
                   : (!resolvedConfig.adapters.runtimeDriverEnabled
                         ? 'runtimeDriver is disabled.'
                         : runtimeDriverProbe.reason)),
+        supportLevel: SupportLevel.beta,
+        includedInStableLane: false,
       ),
     };
 
     final adapters = await adapterRegistry.currentResource();
 
     return <String, Object?>{
+      'releaseChannel': flutterHelmReleaseChannel,
+      'stableHarnessTags': flutterHelmStableHarnessTags,
       'profile': resolvedConfig.activeProfile,
       'availableProfiles': resolvedConfig.availableProfiles,
       'deprecations': resolvedConfig.adapters.deprecations,
@@ -298,6 +322,16 @@ class HardeningToolService {
       },
       'transport': <String, Object?>{
         'mode': transportMode,
+        'supportLevels': <String, Object?>{
+          'stdio': supportLevelMetadata(
+            supportLevel: SupportLevel.stable,
+            includedInStableLane: true,
+          ),
+          'http': supportLevelMetadata(
+            supportLevel: SupportLevel.preview,
+            includedInStableLane: false,
+          ),
+        },
         'httpPreview': _probeStatus(
           supported: transportMode == 'http',
           status: transportMode == 'http' ? 'degraded' : 'ok',
@@ -308,11 +342,18 @@ class HardeningToolService {
             'HTTP preview is intended for localhost development only.',
             'Roots-aware client roots are not available over HTTP preview in Sprint 9.',
           ],
+          supportLevel: SupportLevel.preview,
+          includedInStableLane: false,
         ),
       },
       'adapters': adapters,
       'checks': checks,
       'workflows': workflows,
+      'resources': <String, Object?>{
+        'compatibility': 'config://compatibility/current',
+        'artifactsStatus': 'config://artifacts/status',
+        'observability': 'config://observability/current',
+      },
     };
   }
 
@@ -428,6 +469,8 @@ class HardeningToolService {
     required String status,
     required String? reason,
     required List<String> requirements,
+    SupportLevel supportLevel = SupportLevel.stable,
+    bool includedInStableLane = true,
     Map<String, Object?> extra = const <String, Object?>{},
   }) {
     return <String, Object?>{
@@ -435,6 +478,10 @@ class HardeningToolService {
       'status': status,
       'reason': reason,
       'requirements': requirements,
+      ...supportLevelMetadata(
+        supportLevel: supportLevel,
+        includedInStableLane: includedInStableLane,
+      ),
       ...extra,
     };
   }
@@ -443,12 +490,18 @@ class HardeningToolService {
     required bool configured,
     required bool supported,
     required String? reason,
+    SupportLevel supportLevel = SupportLevel.stable,
+    bool includedInStableLane = true,
   }) {
     return <String, Object?>{
       'configured': configured,
       'supported': supported,
       'status': !configured ? 'unavailable' : (supported ? 'ok' : 'degraded'),
       'reason': reason,
+      ...supportLevelMetadata(
+        supportLevel: supportLevel,
+        includedInStableLane: includedInStableLane,
+      ),
     };
   }
 

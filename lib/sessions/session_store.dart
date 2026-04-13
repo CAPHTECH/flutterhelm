@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutterhelm/observability/store.dart';
 import 'package:flutterhelm/server/errors.dart';
 import 'package:flutterhelm/sessions/session.dart';
 import 'package:path/path.dart' as p;
@@ -104,20 +105,24 @@ class LiveSessionHandle {
 }
 
 class SessionStore {
-  SessionStore({String? sessionsFilePath})
+  SessionStore({String? sessionsFilePath, this.observability})
     : _sessionsFilePath =
           sessionsFilePath ??
           p.join(Directory.systemTemp.path, 'flutterhelm_sessions_test.json');
 
-  SessionStore._(this._sessionsFilePath);
+  SessionStore._(this._sessionsFilePath, this.observability);
 
   final String _sessionsFilePath;
+  final ObservabilityStore? observability;
   final Map<String, SessionRecord> _sessions = <String, SessionRecord>{};
   final Map<String, LiveSessionHandle> _liveHandles = <String, LiveSessionHandle>{};
   int _counter = 0;
 
-  static Future<SessionStore> create({required String stateDir}) async {
-    final store = SessionStore._(p.join(stateDir, 'sessions.json'));
+  static Future<SessionStore> create({
+    required String stateDir,
+    ObservabilityStore? observability,
+  }) async {
+    final store = SessionStore._(p.join(stateDir, 'sessions.json'), observability);
     await store._load();
     return store;
   }
@@ -199,6 +204,7 @@ class SessionStore {
       now: createdAt,
     );
     _sessions[sessionId] = session;
+    observability?.recordSessionLifecycle('context_created');
     unawaited(_persist());
     return session;
   }
@@ -241,6 +247,7 @@ class SessionStore {
       lastSeenAt: now,
     );
     _sessions[session.sessionId] = session;
+    observability?.recordSessionLifecycle('attached_created');
     unawaited(_persist());
     return session;
   }
@@ -274,6 +281,7 @@ class SessionStore {
       lastExitCode: null,
     );
     _sessions[sessionId] = updated;
+    observability?.recordSessionLifecycle('owned_running');
     unawaited(_persist());
     return updated;
   }
@@ -390,12 +398,16 @@ class SessionStore {
       lastSeenAt: DateTime.now().toUtc(),
     );
     _sessions[sessionId] = updated;
+    observability?.recordSessionLifecycle(
+      profileActive ? 'profile_active' : 'profile_inactive',
+    );
     unawaited(_persist());
     return updated;
   }
 
   SessionRecord replace(SessionRecord session) {
     _sessions[session.sessionId] = session;
+    observability?.recordSessionLifecycle('replaced');
     unawaited(_persist());
     return session;
   }

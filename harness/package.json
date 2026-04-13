@@ -17,6 +17,7 @@
     "interaction": "pnpm run build && pnpm run validate && pnpm run run -- --tag interaction",
     "hardening": "pnpm run build && pnpm run validate && pnpm run run -- --tag hardening",
     "ecosystem": "pnpm run build && pnpm run validate && pnpm run run -- --tag ecosystem",
+    "stable": "pnpm run smoke && pnpm run contracts && pnpm run hardening && pnpm run runtime && pnpm run profiling && pnpm run bridge",
     "beta": "pnpm run smoke && pnpm run contracts && pnpm run hardening && pnpm run ecosystem && pnpm run runtime && pnpm run profiling && pnpm run bridge && pnpm run interaction",
     "qa": "pnpm run build && pnpm run validate && pnpm run run -- --tag edge && pnpm run run -- --tag adversarial"
   },

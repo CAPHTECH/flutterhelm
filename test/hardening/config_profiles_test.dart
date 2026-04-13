@@ -31,8 +31,16 @@ retention:
   heavyArtifactsDays: 7
   metadataDays: 30
 adapters:
-  runtimeDriver:
-    enabled: false
+  providers:
+    custom.runtime.driver:
+      kind: stdio_json
+      families:
+        - runtimeDriver
+      command: dart
+      args:
+        - run
+        - tool/fake_runtime_driver.dart
+      startupTimeoutMs: 8000
 profiles:
   sim:
     defaults:
@@ -42,8 +50,8 @@ profiles:
       - session
       - runtime_interaction
     adapters:
-      runtimeDriver:
-        enabled: true
+      active:
+        runtimeDriver: custom.runtime.driver
 ''');
 
       final config = await ConfigRepository(runtimePaths).load(
@@ -58,7 +66,14 @@ profiles:
         'session',
         'runtime_interaction',
       ]);
-      expect(config.adapters.runtimeDriverEnabled, isTrue);
+      expect(
+        config.adapters.activeProviders['runtimeDriver'],
+        'custom.runtime.driver',
+      );
+      expect(
+        config.adapters.providerForFamily('runtimeDriver')?.kind,
+        'stdio_json',
+      );
     });
 
     test('throws when a selected profile does not exist', () async {

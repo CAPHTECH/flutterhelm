@@ -564,9 +564,21 @@ safety:
     - hot_restart
     - build_app:release
 adapters:
-  runtimeDriver:
-    enabled: ${runtimeDriverEnabled ? "true" : "false"}
-    startupTimeoutMs: ${runtimeDriverStartupTimeoutMs}
+  active:
+    runtimeDriver: builtin.runtime_driver.external_process
+  providers:
+    builtin.runtime_driver.external_process:
+      kind: builtin
+      families:
+        - runtimeDriver
+      command: npx
+      args:
+        - -y
+        - "@mobilenext/mobile-mcp@latest"
+        - --stdio
+      startupTimeoutMs: ${runtimeDriverStartupTimeoutMs}
+      options:
+        enabled: ${runtimeDriverEnabled ? "true" : "false"}
 `;
 }
 
@@ -853,6 +865,8 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
       || hardening.pinnedArtifacts !== true
       || hardening.configProfiles !== true
       || hardening.compatibilityResource !== "config://compatibility/current"
+      || hardening.artifactsStatusResource !== "config://artifacts/status"
+      || hardening.observabilityResource !== "config://observability/current"
     ) {
       throw new Error(`Unexpected hardening capability metadata: ${JSON.stringify(hardening)}`);
     }
@@ -887,7 +901,7 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
       adapterRegistry.customProviderKinds,
       "capabilities.experimental.adapterRegistry.customProviderKinds",
     );
-    if (!customProviderKinds.includes("stdio_json") || adapterRegistry.legacyConfigShim !== true) {
+    if (!customProviderKinds.includes("stdio_json") || adapterRegistry.legacyConfigShim !== false) {
       throw new Error(`Unexpected adapter registry capability metadata: ${JSON.stringify(adapterRegistry)}`);
     }
 
@@ -1828,17 +1842,20 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "README.md",
     [
-      "Local beta-ready implementation",
-      "0.1.0-phase6-beta",
+      "Local stable-ready implementation",
+      "0.2.0-stable",
       "`compatibility_check`",
       "`artifact_pin`",
       "`artifact_unpin`",
       "`artifact_pin_list`",
       "`config://compatibility/current`",
       "`config://artifacts/pins`",
+      "`config://artifacts/status`",
+      "`config://observability/current`",
       "docs/10-migration-notes.md",
       "`--profile`",
       "`FLUTTERHELM_PROFILE`",
+      "pnpm -C harness stable",
       "pnpm -C harness beta",
     ],
     "README hardening core",
@@ -1847,6 +1864,22 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
     scripts?: Record<string, string>;
   };
   const betaScript = harnessPackage.scripts?.beta;
+  const stableScript = harnessPackage.scripts?.stable;
+  if (!stableScript) {
+    throw new Error("harness/package.json is missing stable script");
+  }
+  for (const expected of [
+    "smoke",
+    "contracts",
+    "hardening",
+    "runtime",
+    "profiling",
+    "bridge",
+  ]) {
+    if (!stableScript.includes(expected)) {
+      throw new Error(`harness stable script is missing ${expected}: ${stableScript}`);
+    }
+  }
   if (!betaScript) {
     throw new Error("harness/package.json is missing beta script");
   }
@@ -1868,13 +1901,14 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "docs/07-roadmap.md",
     [
-      "Phase 6 beta-ready",
-      "Sprint 10-12 beta release discipline",
+      "Phase 6 stable-ready",
+      "Sprint 8-15",
       "concurrency handling",
       "pinned artifacts",
       "config profiles",
       "compatibility matrix",
-      "0.1.0-phase6-beta",
+      "0.2.0-stable",
+      "`stable` harness aggregate",
     ],
     "Roadmap Phase 6",
   );
@@ -1892,8 +1926,16 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
       "`artifact_pin_list`",
       "`compatibility_check`",
       "config profile overlay",
-      "migration notes / release discipline",
+      "### Sprint 13",
+      "### Sprint 14",
+      "### Sprint 15",
+      "stable migration notes",
+      "`config://artifacts/status`",
+      "`config://observability/current`",
+      "age + capacity retention policy",
+      "stable lane classification",
       "`beta` harness aggregate command",
+      "`stable` harness aggregate command",
     ],
     "Implementation plan Sprint 8",
   );
@@ -1901,11 +1943,12 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "docs/10-migration-notes.md",
     [
-      "beta-ready",
-      "0.1.0-phase6-beta",
+      "stable-ready",
+      "0.2.0-stable",
       "migration notes",
+      "pnpm -C harness stable",
       "pnpm -C harness beta",
-      "deprecation",
+      "support levels",
     ],
     "Migration notes",
   );
@@ -1929,8 +1972,10 @@ async function checkPhase6HardeningFlow(repoRoot: string): Promise<void> {
         "config://workspace/current",
         "config://workspace/defaults",
         "config://artifacts/pins",
+        "config://artifacts/status",
         "config://adapters/current",
         "config://compatibility/current",
+        "config://observability/current",
       ]) {
         if (!resourceUris.includes(expected)) {
           throw new Error(`resources/list is missing ${expected}`);
@@ -1963,6 +2008,12 @@ async function checkPhase6HardeningFlow(repoRoot: string): Promise<void> {
       }
       if (workspaceDecoded.adaptersResource !== "config://adapters/current") {
         throw new Error(`config://workspace/current adaptersResource mismatch: ${JSON.stringify(workspaceDecoded)}`);
+      }
+      if (workspaceDecoded.artifactsStatusResource !== "config://artifacts/status") {
+        throw new Error(`config://workspace/current artifactsStatusResource mismatch: ${JSON.stringify(workspaceDecoded)}`);
+      }
+      if (workspaceDecoded.observabilityResource !== "config://observability/current") {
+        throw new Error(`config://workspace/current observabilityResource mismatch: ${JSON.stringify(workspaceDecoded)}`);
       }
 
       const compatibility = await client.callTool("compatibility_check");
@@ -2001,6 +2052,33 @@ async function checkPhase6HardeningFlow(repoRoot: string): Promise<void> {
       ) as Record<string, unknown>;
       if (compatibilityDecoded.profile !== "interactive") {
         throw new Error(`config://compatibility/current profile mismatch: ${JSON.stringify(compatibilityDecoded)}`);
+      }
+      const artifactsStatus = await client.request("resources/read", {
+        uri: "config://artifacts/status",
+      });
+      const artifactsStatusBody = requireObject(
+        requireArray(artifactsStatus.contents, "config://artifacts/status contents")[0],
+        "config://artifacts/status body",
+      );
+      const artifactsStatusDecoded = JSON.parse(
+        requireString(artifactsStatusBody.text, "config://artifacts/status text"),
+      ) as Record<string, unknown>;
+      if (typeof artifactsStatusDecoded.capacityBytes !== "number") {
+        throw new Error(`config://artifacts/status capacityBytes is missing: ${JSON.stringify(artifactsStatusDecoded)}`);
+      }
+
+      const observability = await client.request("resources/read", {
+        uri: "config://observability/current",
+      });
+      const observabilityBody = requireObject(
+        requireArray(observability.contents, "config://observability/current contents")[0],
+        "config://observability/current body",
+      );
+      const observabilityDecoded = JSON.parse(
+        requireString(observabilityBody.text, "config://observability/current text"),
+      ) as Record<string, unknown>;
+      if (!("transport" in observabilityDecoded)) {
+        throw new Error(`config://observability/current transport section is missing: ${JSON.stringify(observabilityDecoded)}`);
       }
 
       const unitTests = await client.callTool("run_unit_tests", {
@@ -2120,8 +2198,8 @@ async function checkPhase6EcosystemDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "README.md",
     [
-      "beta-ready",
-      "0.1.0-phase6-beta",
+      "stable-ready",
+      "0.2.0-stable",
       "`adapter_list`",
       "`config://adapters/current`",
       "`--transport http`",
@@ -2143,8 +2221,9 @@ async function checkPhase6EcosystemDocs(repoRoot: string): Promise<void> {
       "`adapter_list`",
       "`experimental.httpPreview.mode = preview`",
       "`experimental.adapterRegistry.customProviderKinds = [\"stdio_json\"]`",
-      "beta release metadata",
-      "`serverInfo.contractVersion = 0.1.0-phase6-beta`",
+      "`experimental.adapterRegistry.legacyConfigShim = false`",
+      "stable release metadata",
+      "`serverInfo.contractVersion = 0.2.0-stable`",
     ],
     "MCP contract ecosystem preview",
   );
@@ -2152,8 +2231,8 @@ async function checkPhase6EcosystemDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "docs/07-roadmap.md",
     [
-      "Sprint 10-12 beta release discipline",
-      "0.1.0-phase6-beta",
+      "Sprint 8-15",
+      "0.2.0-stable",
       "Streamable HTTP preview",
       "extension / plugin point for custom adapters",
       "adapter registry / custom `stdio_json` provider / `adapter_list` / `config://adapters/current`",
@@ -2174,6 +2253,7 @@ async function checkPhase6EcosystemDocs(repoRoot: string): Promise<void> {
       "`stdio_json`",
       "`--transport http`",
       "localhost-only Streamable HTTP preview",
+      "`stable` harness aggregate command",
       "`beta` harness aggregate command",
     ],
     "Implementation plan Sprint 9",
@@ -2182,10 +2262,10 @@ async function checkPhase6EcosystemDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "docs/adrs/ADR-002-transport-roots.md",
     [
-      "Sprint 12 update",
+      "Sprint 15 update",
       "primary transport は引き続き `stdio`",
       "HTTP preview では Roots transport を扱わず",
-      "0.1.0-phase6-beta",
+      "0.2.0-stable",
     ],
     "ADR-002 Sprint 9 update",
   );

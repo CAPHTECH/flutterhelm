@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutterhelm/config/config.dart';
+import 'package:flutterhelm/observability/store.dart';
+import 'package:flutterhelm/server/support_levels.dart';
 import 'package:flutterhelm/utils/process_runner.dart';
 
 const Duration stdioJsonProviderInvokeTimeout = Duration(seconds: 30);
@@ -106,6 +108,10 @@ class AdapterFamilyStatus {
     required this.builtin,
     required this.healthy,
     required this.operations,
+    required this.supportLevel,
+    required this.familySupportLevel,
+    required this.activeProviderSupportLevel,
+    required this.includedInStableLane,
     required this.state,
     required this.reasons,
     required this.failureCount,
@@ -120,6 +126,10 @@ class AdapterFamilyStatus {
   final bool builtin;
   final bool healthy;
   final List<String> operations;
+  final String supportLevel;
+  final String familySupportLevel;
+  final String activeProviderSupportLevel;
+  final bool includedInStableLane;
   final String state;
   final List<String> reasons;
   final int failureCount;
@@ -135,6 +145,10 @@ class AdapterFamilyStatus {
       'builtin': builtin,
       'healthy': healthy,
       'operations': operations,
+      'supportLevel': supportLevel,
+      'familySupportLevel': familySupportLevel,
+      'activeProviderSupportLevel': activeProviderSupportLevel,
+      'includedInStableLane': includedInStableLane,
       'state': state,
       'reasons': reasons,
       if (reason != null) 'reason': reason,
@@ -149,10 +163,12 @@ class AdapterRegistry {
   AdapterRegistry({
     required this.config,
     required this.processRunner,
+    this.observability,
   });
 
   final FlutterHelmConfig config;
   final ProcessRunner processRunner;
+  final ObservabilityStore? observability;
   final Map<String, _StdioJsonProviderClient> _providerClients =
       <String, _StdioJsonProviderClient>{};
   RuntimeDriverAdapter? _runtimeDriverAdapter;
@@ -224,6 +240,10 @@ class AdapterRegistry {
         entry.key: await _providerStatus(entry.value),
     };
     return <String, Object?>{
+      'releaseChannel': flutterHelmReleaseChannel,
+      'stableFamilies': supportedFamilies
+          .where((String family) => workflowIncludedInStableLane(_familyToWorkflow(family)))
+          .toList(),
       'families': families,
       'active': config.adapters.activeProviders,
       'providers': <String, Object?>{
@@ -232,6 +252,8 @@ class AdapterRegistry {
             'kind': entry.value.kind,
             'families': entry.value.families,
             'builtin': entry.value.builtin,
+            'supportLevel': adapterProviderSupportLevel(entry.value).name,
+            'includedInStableLane': adapterProviderIncludedInStableLane(entry.value),
             if (entry.value.command != null) 'command': entry.value.command,
             if (entry.value.args.isNotEmpty) 'args': entry.value.args,
             if (entry.value.startupTimeoutMs > 0)
@@ -260,6 +282,10 @@ class AdapterRegistry {
         builtin: false,
         healthy: false,
         operations: const <String>[],
+        supportLevel: adapterFamilySupportLevel(family).name,
+        familySupportLevel: adapterFamilySupportLevel(family).name,
+        activeProviderSupportLevel: SupportLevel.preview.name,
+        includedInStableLane: false,
         state: 'degraded',
         reasons: <String>['Unsupported adapter family: $family'],
         failureCount: 0,
@@ -276,6 +302,10 @@ class AdapterRegistry {
         builtin: false,
         healthy: false,
         operations: const <String>[],
+        supportLevel: adapterFamilySupportLevel(family).name,
+        familySupportLevel: adapterFamilySupportLevel(family).name,
+        activeProviderSupportLevel: SupportLevel.preview.name,
+        includedInStableLane: false,
         state: 'degraded',
         reasons: const <String>['No active provider configured for the family.'],
         failureCount: 0,
@@ -292,6 +322,10 @@ class AdapterRegistry {
         builtin: false,
         healthy: false,
         operations: const <String>[],
+        supportLevel: adapterFamilySupportLevel(family).name,
+        familySupportLevel: adapterFamilySupportLevel(family).name,
+        activeProviderSupportLevel: SupportLevel.preview.name,
+        includedInStableLane: false,
         state: 'degraded',
         reasons: <String>['Configured provider $providerId was not found.'],
         failureCount: 0,
@@ -306,6 +340,10 @@ class AdapterRegistry {
         builtin: provider.builtin,
         healthy: false,
         operations: const <String>[],
+        supportLevel: adapterProviderSupportLevel(provider).name,
+        familySupportLevel: adapterFamilySupportLevel(family).name,
+        activeProviderSupportLevel: adapterProviderSupportLevel(provider).name,
+        includedInStableLane: false,
         state: 'degraded',
         reasons: <String>['Provider $providerId does not support family $family.'],
         failureCount: 0,
@@ -335,6 +373,13 @@ class AdapterRegistry {
         builtin: provider.builtin,
         healthy: healthy,
         operations: operations,
+        supportLevel: adapterProviderSupportLevel(provider).name,
+        familySupportLevel: adapterFamilySupportLevel(family).name,
+        activeProviderSupportLevel: adapterProviderSupportLevel(provider).name,
+        includedInStableLane: adapterFamilyIncludedInStableLane(
+          family,
+          provider,
+        ),
         state: _stringValue(health['state']) ?? 'degraded',
         reasons: reasons.isEmpty && reason != null
             ? <String>[reason]
@@ -356,6 +401,13 @@ class AdapterRegistry {
         builtin: provider.builtin,
         healthy: health.connected,
         operations: health.supportedActions,
+        supportLevel: adapterProviderSupportLevel(provider).name,
+        familySupportLevel: adapterFamilySupportLevel(family).name,
+        activeProviderSupportLevel: adapterProviderSupportLevel(provider).name,
+        includedInStableLane: adapterFamilyIncludedInStableLane(
+          family,
+          provider,
+        ),
         state: health.connected ? 'healthy' : 'degraded',
         reasons: <String>[
           if (health.error != null) health.error!,
@@ -381,6 +433,10 @@ class AdapterRegistry {
       builtin: provider.builtin,
       healthy: true,
       operations: _builtinOperations[family] ?? const <String>[],
+      supportLevel: adapterProviderSupportLevel(provider).name,
+      familySupportLevel: adapterFamilySupportLevel(family).name,
+      activeProviderSupportLevel: adapterProviderSupportLevel(provider).name,
+      includedInStableLane: adapterFamilyIncludedInStableLane(family, provider),
       state: 'healthy',
       reasons: const <String>[],
       failureCount: 0,
@@ -399,13 +455,19 @@ class AdapterRegistry {
               ? provider.startupTimeoutMs
               : 5000,
         ),
+        observability: observability,
       ),
     );
   }
 
   Future<Map<String, Object?>> _providerStatus(AdapterProviderConfig provider) async {
     if (provider.kind == 'stdio_json') {
-      return _providerClient(provider).health();
+      final health = await _providerClient(provider).health();
+      return <String, Object?>{
+        ...health,
+        'supportLevel': adapterProviderSupportLevel(provider).name,
+        'includedInStableLane': adapterProviderIncludedInStableLane(provider),
+      };
     }
 
     if (provider.id == 'builtin.runtime_driver.external_process') {
@@ -416,6 +478,8 @@ class AdapterRegistry {
       return <String, Object?>{
         'state': enabled ? 'healthy' : 'degraded',
         'healthy': enabled,
+        'supportLevel': adapterProviderSupportLevel(provider).name,
+        'includedInStableLane': adapterProviderIncludedInStableLane(provider),
         'reasons': <String>[if (reason != null) reason],
         'reason': reason,
         'failureCount': 0,
@@ -432,12 +496,25 @@ class AdapterRegistry {
     return <String, Object?>{
       'state': 'healthy',
       'healthy': true,
+      'supportLevel': adapterProviderSupportLevel(provider).name,
+      'includedInStableLane': adapterProviderIncludedInStableLane(provider),
       'reasons': const <String>[],
       'failureCount': 0,
       'providerInfo': <String, Object?>{
         'kind': provider.kind,
         'builtin': provider.builtin,
       },
+    };
+  }
+
+  String _familyToWorkflow(String family) {
+    return switch (family) {
+      'delegate' => 'workspace',
+      'flutterCli' => 'launcher',
+      'profiling' => 'profiling',
+      'runtimeDriver' => 'runtime_interaction',
+      'platformBridge' => 'platform_bridge',
+      _ => family,
     };
   }
 }
@@ -862,12 +939,14 @@ class _StdioJsonProviderClient {
     required this.command,
     required this.args,
     required this.startupTimeout,
+    this.observability,
   });
 
   final String providerId;
   final String command;
   final List<String> args;
   final Duration startupTimeout;
+  final ObservabilityStore? observability;
   _JsonRpcConnection? _connection;
   _ProviderLifecycleState _state = _ProviderLifecycleState.starting;
   int _failureCount = 0;
@@ -883,6 +962,7 @@ class _StdioJsonProviderClient {
     required Map<String, Object?> input,
   }) async {
     final connection = await _ensureConnection();
+    final startedAt = DateTime.now().toUtc();
     try {
       final result = await connection.request(
         'provider/invoke',
@@ -894,9 +974,23 @@ class _StdioJsonProviderClient {
         timeoutOverride: stdioJsonProviderInvokeTimeout,
       );
       _recordHealthy();
+      observability?.recordAdapterInvocation(
+        providerId: providerId,
+        family: family,
+        operation: operation,
+        duration: DateTime.now().toUtc().difference(startedAt),
+        success: true,
+      );
       return result;
     } on Object catch (error) {
       _recordFailure(error);
+      observability?.recordAdapterInvocation(
+        providerId: providerId,
+        family: family,
+        operation: operation,
+        duration: DateTime.now().toUtc().difference(startedAt),
+        success: false,
+      );
       rethrow;
     }
   }
@@ -931,6 +1025,7 @@ class _StdioJsonProviderClient {
 
     try {
       final connection = await _ensureConnection();
+      final startedAt = DateTime.now().toUtc();
       final payload = await connection.request(
         'provider/health',
         const <String, Object?>{},
@@ -969,6 +1064,13 @@ class _StdioJsonProviderClient {
             : reasons,
         backoffUntil: _backoffUntil,
       );
+      observability?.recordAdapterInvocation(
+        providerId: providerId,
+        family: 'provider',
+        operation: 'health',
+        duration: DateTime.now().toUtc().difference(startedAt),
+        success: healthy,
+      );
       return _healthResponse(
         snapshot: snapshot,
         families: payload['families'],
@@ -976,6 +1078,13 @@ class _StdioJsonProviderClient {
       );
     } on Object catch (error) {
       final snapshot = _recordFailureSnapshot(error);
+      observability?.recordAdapterInvocation(
+        providerId: providerId,
+        family: 'provider',
+        operation: 'health',
+        duration: Duration.zero,
+        success: false,
+      );
       return _healthResponse(
         snapshot: snapshot,
         families: <String, Object?>{
@@ -1007,6 +1116,7 @@ class _StdioJsonProviderClient {
       );
     }
     _state = _ProviderLifecycleState.starting;
+    final startedAt = DateTime.now().toUtc();
     try {
       final process = await Process.start(command, args);
       final connection = _JsonRpcConnection._(process: process);
@@ -1028,9 +1138,23 @@ class _StdioJsonProviderClient {
         );
       }
       _connection = connection;
+      observability?.recordAdapterInvocation(
+        providerId: providerId,
+        family: 'provider',
+        operation: 'initialize',
+        duration: DateTime.now().toUtc().difference(startedAt),
+        success: true,
+      );
       return connection;
     } on Object catch (error) {
       _recordFailure(error);
+      observability?.recordAdapterInvocation(
+        providerId: providerId,
+        family: 'provider',
+        operation: 'initialize',
+        duration: DateTime.now().toUtc().difference(startedAt),
+        success: false,
+      );
       rethrow;
     }
   }

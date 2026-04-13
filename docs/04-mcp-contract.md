@@ -28,7 +28,7 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 
 ### Current local alpha surface
 
-この repository の current implementation は Phase 5 に Sprint 8 hardening core と Sprint 9 ecosystem preview、Sprint 10-12 の beta release discipline を足した状態です。
+この repository の current implementation は Phase 5 に Sprint 8-15 の hardening / ecosystem / stable release discipline を足した状態です。
 
 - `workspace`, `session`, `launcher`, `runtime_readonly`, `tests` workflow を local で実装
 - package search / dependency mutation approval replay / integration tests / coverage readback を含む
@@ -36,9 +36,9 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 - platform bridge workflow を local で実装し、mode は `handoff_only`、IDE automation は行わない
 - runtime interaction workflow を local で実装し、UI backend は external adapter、hot op backend は `flutter run --machine`
 - hardening core を local で実装し、busy policy は `fail_fast`、artifact pinning と config profile overlay と compatibility preflight を含む
-- adapter registry を local で実装し、custom provider kind は `stdio_json`、legacy adapter config は shim で受理
+- adapter registry を local で実装し、custom provider kind は `stdio_json`、legacy adapter config は stable cut で削除済み
 - transport は `stdio-first` で、localhost-only の Streamable HTTP preview を追加済み
-- current contract version は `0.1.0-phase6-beta`
+- current contract version は `0.2.0-stable`
 
 ## 3. Workflow Groups
 
@@ -158,6 +158,8 @@ current implementation は capability metadata に次を含みます。
 - `experimental.hardening.pinnedArtifacts = true`
 - `experimental.hardening.configProfiles = true`
 - `experimental.hardening.compatibilityResource = config://compatibility/current`
+- `experimental.hardening.artifactsStatusResource = config://artifacts/status`
+- `experimental.hardening.observabilityResource = config://observability/current`
 
 競合する mutation は queue せず、`SESSION_BUSY` または `WORKSPACE_BUSY` で即時失敗します。
 
@@ -172,18 +174,19 @@ current implementation は capability metadata に次を含みます。
 - `experimental.httpPreview.resumability = false`
 - `experimental.adapterRegistry.families = ["delegate", "flutterCli", "profiling", "runtimeDriver", "platformBridge"]`
 - `experimental.adapterRegistry.customProviderKinds = ["stdio_json"]`
-- `experimental.adapterRegistry.legacyConfigShim = true`
+- `experimental.adapterRegistry.legacyConfigShim = false`
 
 HTTP preview は request-response only です。`GET`/SSE/resume は扱わず、`MCP-Session-Id` header で session を維持します。
 stdio が primary transport であり、HTTP preview では Roots transport を扱わないため fallback semantics を前提にします。
 
-## 4.11 beta release metadata
+## 4.11 stable release metadata
 
-current implementation の beta release contract は次を公開します。
+current implementation の stable release contract は次を公開します。
 
-- `serverInfo.contractVersion = 0.1.0-phase6-beta`
-- legacy adapter config は互換入力として受理しつつ、deprecated であることを public resource で可視化
-- deprecation / health / active selection は `adapter_list`, `config://adapters/current`, `compatibility_check` で確認可能
+- `serverInfo.contractVersion = 0.2.0-stable`
+- support level は `stable`, `beta`, `preview` の 3 段階
+- support level / health / active selection は `workspace_show`, `adapter_list`, `config://adapters/current`, `compatibility_check` で確認可能
+- stable lane は `stdio` と built-in workflow 群を対象とし、HTTP preview は含まない
 
 ## 5. Sample Tool Schemas
 
@@ -591,8 +594,8 @@ current implementation の `capabilities.experimental.runtimeInteraction` は以
 
 - semantic versioning for server releases
 - contract version surfaced in `serverInfo`
-- current beta contract version is `0.1.0-phase6-beta`
-- deprecated config / tools should surface via public resources before removal
+- current stable contract version is `0.2.0-stable`
+- deprecated config / tools should surface via public resources before removal or fail fast after the migration cut
 - breaking tool/schema changes require minor/major protocol note
 - deprecated tools remain for at least one minor release when feasible
 

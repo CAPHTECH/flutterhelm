@@ -158,7 +158,9 @@ FlutterHelm はこれを徹底します。
 - `config://workspace/defaults`
 - `config://adapters/current`
 - `config://artifacts/pins`
+- `config://artifacts/status`
 - `config://compatibility/current`
+- `config://observability/current`
 
 ## 7.2 logs / diagnostics
 

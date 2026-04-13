@@ -3,14 +3,20 @@ import 'dart:io';
 
 import 'package:flutterhelm/artifacts/resources.dart';
 import 'package:flutterhelm/config/config.dart';
+import 'package:flutterhelm/observability/store.dart';
 import 'package:path/path.dart' as p;
 
 class ArtifactStore {
-  ArtifactStore({required this.stateDir});
+  ArtifactStore({
+    required this.stateDir,
+    this.observability,
+  });
 
   final String stateDir;
+  final ObservabilityStore? observability;
 
   String get _artifactsDir => p.join(stateDir, 'artifacts');
+  String get _retentionStatusPath => p.join(_artifactsDir, 'retention-status.json');
 
   String sessionArtifactsDir(String sessionId) => p.join(_artifactsDir, 'sessions', sessionId);
 
@@ -69,6 +75,7 @@ class ArtifactStore {
     final file = File(p.join(sessionArtifactsDir(sessionId), '$stream.log'));
     await file.parent.create(recursive: true);
     await file.writeAsString('$line\n', mode: FileMode.append);
+    _recordPublished(sessionLogUri(sessionId, stream));
   }
 
   Future<void> appendSessionMachineEvent({
@@ -83,65 +90,71 @@ class ArtifactStore {
   Future<void> writeSessionRuntimeErrors({
     required String sessionId,
     required Map<String, Object?> payload,
-  }) {
-    return _writeJson(
+  }) async {
+    await _writeJson(
       File(p.join(sessionArtifactsDir(sessionId), 'runtime-errors-current.json')),
       payload,
     );
+    _recordPublished(sessionRuntimeErrorsUri(sessionId));
   }
 
   Future<void> writeSessionWidgetTree({
     required String sessionId,
     required int depth,
     required Map<String, Object?> payload,
-  }) {
-    return _writeJson(
+  }) async {
+    await _writeJson(
       File(p.join(sessionArtifactsDir(sessionId), 'widget-tree-depth-$depth.json')),
       payload,
     );
+    _recordPublished(sessionWidgetTreeUri(sessionId, depth));
   }
 
   Future<void> writeSessionAppState({
     required String sessionId,
     required Map<String, Object?> payload,
-  }) {
-    return _writeJson(
+  }) async {
+    await _writeJson(
       File(p.join(sessionArtifactsDir(sessionId), 'app-state-summary.json')),
       payload,
     );
+    _recordPublished(sessionAppStateUri(sessionId));
   }
 
   Future<void> writeSessionCpuProfile({
     required String sessionId,
     required String captureId,
     required Map<String, Object?> payload,
-  }) {
-    return _writeJson(
+  }) async {
+    await _writeJson(
       File(p.join(sessionArtifactsDir(sessionId), 'cpu-profile-$captureId.json')),
       payload,
     );
+    _recordPublished(sessionCpuProfileUri(sessionId, captureId));
   }
 
   Future<void> writeSessionTimeline({
     required String sessionId,
     required String captureId,
     required Map<String, Object?> payload,
-  }) {
-    return _writeJson(
+  }) async {
+    await _writeJson(
       File(p.join(sessionArtifactsDir(sessionId), 'timeline-$captureId.json')),
       payload,
     );
+    _recordPublished(sessionTimelineUri(sessionId, captureId));
   }
 
   Future<void> writeSessionMemorySnapshot({
     required String sessionId,
     required String snapshotId,
     required Map<String, Object?> payload,
-  }) {
-    return _writeJson(
+  }) async {
+    await _writeJson(
       File(p.join(sessionArtifactsDir(sessionId), 'memory-$snapshotId.json')),
       payload,
     );
+    _recordPublished(sessionMemoryUri(sessionId, snapshotId));
   }
 
   Future<void> writeSessionHeapSnapshotSidecar({
@@ -165,25 +178,42 @@ class ArtifactStore {
     required String sessionId,
     required String platform,
     required Map<String, Object?> payload,
-  }) {
-    return _writeJson(
+  }) async {
+    await _writeJson(
       File(p.join(sessionArtifactsDir(sessionId), 'native-handoff-$platform.json')),
       payload,
     );
+    _recordPublished(sessionNativeHandoffUri(sessionId, platform));
+  }
+
+  Future<void> writeSessionScreenshot({
+    required String sessionId,
+    required String captureId,
+    required String format,
+    required List<int> bytes,
+  }) async {
+    final file = File(
+      p.join(sessionArtifactsDir(sessionId), 'screenshot-$captureId.$format'),
+    );
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(bytes);
+    _recordPublished(sessionScreenshotUri(sessionId, captureId, format));
   }
 
   Future<void> writeTestRunSummary({
     required String runId,
     required Map<String, Object?> payload,
-  }) {
-    return _writeJson(File(p.join(testRunArtifactsDir(runId), 'summary.json')), payload);
+  }) async {
+    await _writeJson(File(p.join(testRunArtifactsDir(runId), 'summary.json')), payload);
+    _recordPublished(testSummaryUri(runId));
   }
 
   Future<void> writeTestRunDetails({
     required String runId,
     required Map<String, Object?> payload,
-  }) {
-    return _writeJson(File(p.join(testRunArtifactsDir(runId), 'details.json')), payload);
+  }) async {
+    await _writeJson(File(p.join(testRunArtifactsDir(runId), 'details.json')), payload);
+    _recordPublished(testDetailsUri(runId));
   }
 
   Future<void> appendTestRunLog({
@@ -194,16 +224,18 @@ class ArtifactStore {
     final file = File(p.join(testRunArtifactsDir(runId), '$stream.log'));
     await file.parent.create(recursive: true);
     await file.writeAsString('$line\n', mode: FileMode.append);
+    _recordPublished(testLogUri(runId, stream));
   }
 
   Future<void> writeCoverageSummary({
     required String runId,
     required Map<String, Object?> payload,
-  }) {
-    return _writeJson(
+  }) async {
+    await _writeJson(
       File(p.join(testRunArtifactsDir(runId), 'coverage-summary.json')),
       payload,
     );
+    _recordPublished(coverageSummaryUri(runId));
   }
 
   Future<void> writeCoverageLcov({
@@ -213,6 +245,7 @@ class ArtifactStore {
     final file = File(p.join(testRunArtifactsDir(runId), 'coverage.lcov'));
     await file.parent.create(recursive: true);
     await file.writeAsString(contents);
+    _recordPublished(coverageLcovUri(runId));
   }
 
   Future<void> writeMutationSnapshot({
@@ -243,6 +276,7 @@ class ArtifactStore {
     final file = File(p.join(mutationArtifactsDir(changeId), '$stream.log'));
     await file.parent.create(recursive: true);
     await file.writeAsString('$line\n', mode: FileMode.append);
+    _recordPublished(mutationLogUri(changeId, stream));
   }
 
   Future<Map<String, Object?>?> readTestRunSummary(String runId) {
@@ -307,35 +341,133 @@ class ArtifactStore {
       Duration(days: retention.heavyArtifactsDays),
     );
     final removedUris = <String>[];
+    var ageRemovedBytes = 0;
+    final capacityRemovedUris = <String>[];
+    var capacityRemovedBytes = 0;
     final retainedPinnedUris = <String>[];
-    final candidates = await _listStoredArtifactEntries();
+    final candidates = await _listStoredArtifactEntriesWithStats();
+    final totalBytesBefore = candidates.fold<int>(
+      0,
+      (int total, _StoredArtifactFileEntry entry) => total + entry.size,
+    );
+    final remainingEntries = <_StoredArtifactFileEntry>[];
 
     for (final entry in candidates) {
       if (pinnedUris.contains(entry.uri)) {
         retainedPinnedUris.add(entry.uri);
+        remainingEntries.add(entry);
         continue;
       }
-      final file = File(entry.path);
-      if (!await file.exists()) {
+      if (!entry.modified.toUtc().isBefore(cutoff)) {
+        remainingEntries.add(entry);
         continue;
       }
-      final stat = await file.stat();
-      if (!stat.modified.toUtc().isBefore(cutoff)) {
-        continue;
-      }
-      await file.delete();
+      await File(entry.path).delete();
       removedUris.add(entry.uri);
+      ageRemovedBytes += entry.size;
+    }
+
+    var totalBytesAfterAge = remainingEntries.fold<int>(
+      0,
+      (int total, _StoredArtifactFileEntry entry) => total + entry.size,
+    );
+    if (totalBytesAfterAge > retention.maxArtifactBytes) {
+      final evictable = remainingEntries
+          .where((entry) => !pinnedUris.contains(entry.uri))
+          .toList()
+        ..sort((_StoredArtifactFileEntry left, _StoredArtifactFileEntry right) {
+          final modifiedCompare = left.modified.compareTo(right.modified);
+          if (modifiedCompare != 0) {
+            return modifiedCompare;
+          }
+          return left.uri.compareTo(right.uri);
+        });
+      for (final entry in evictable) {
+        if (totalBytesAfterAge <= retention.maxArtifactBytes) {
+          break;
+        }
+        final file = File(entry.path);
+        if (!await file.exists()) {
+          continue;
+        }
+        await file.delete();
+        capacityRemovedUris.add(entry.uri);
+        capacityRemovedBytes += entry.size;
+        totalBytesAfterAge -= entry.size;
+      }
     }
 
     await _removeEmptyArtifactDirectories();
 
-    return <String, Object?>{
+    final summary = <String, Object?>{
       'status': 'completed',
+      'policy': 'age_then_lru',
       'cutoff': cutoff.toIso8601String(),
-      'removedCount': removedUris.length,
+      'capacityBytes': retention.maxArtifactBytes,
+      'totalBytesBefore': totalBytesBefore,
+      'totalBytesAfter': await _currentArtifactUsageBytes(),
+      'removedCount': removedUris.length + capacityRemovedUris.length,
+      'ageRemovedCount': removedUris.length,
+      'ageRemovedBytes': ageRemovedBytes,
       'removedUris': removedUris,
+      'capacityRemovedCount': capacityRemovedUris.length,
+      'capacityRemovedBytes': capacityRemovedBytes,
+      'capacityRemovedUris': capacityRemovedUris,
       'retainedPinnedCount': retainedPinnedUris.length,
       'retainedPinnedUris': retainedPinnedUris,
+    };
+    await _writeRetentionStatus(summary);
+    observability?.recordRetentionSweep(summary);
+    return summary;
+  }
+
+  Future<Map<String, Object?>> artifactStatus({
+    required RetentionConfig retention,
+    required Set<String> pinnedUris,
+  }) async {
+    final cutoff = DateTime.now().toUtc().subtract(
+      Duration(days: retention.heavyArtifactsDays),
+    );
+    final entries = await _listStoredArtifactEntriesWithStats();
+    final totalBytes = entries.fold<int>(
+      0,
+      (int total, _StoredArtifactFileEntry entry) => total + entry.size,
+    );
+    final pinnedBytes = entries
+        .where((entry) => pinnedUris.contains(entry.uri))
+        .fold<int>(
+          0,
+          (int total, _StoredArtifactFileEntry entry) => total + entry.size,
+        );
+    final staleCandidateBytes = entries
+        .where(
+          (entry) =>
+              !pinnedUris.contains(entry.uri) &&
+              entry.modified.toUtc().isBefore(cutoff),
+        )
+        .fold<int>(
+          0,
+          (int total, _StoredArtifactFileEntry entry) => total + entry.size,
+        );
+    final remainingAfterAge = totalBytes - staleCandidateBytes;
+    final capacityOverflowBytes = remainingAfterAge > retention.maxArtifactBytes
+        ? remainingAfterAge - retention.maxArtifactBytes
+        : 0;
+    final lastSweep = await _readRetentionStatus();
+    return <String, Object?>{
+      'artifactCount': entries.length,
+      'totalBytes': totalBytes,
+      'capacityBytes': retention.maxArtifactBytes,
+      'pinnedArtifactCount': pinnedUris.length,
+      'pinnedBytes': pinnedBytes,
+      'staleCandidateBytes': staleCandidateBytes,
+      'capacityOverflowBytes': capacityOverflowBytes,
+      'reclaimableBytes': staleCandidateBytes + capacityOverflowBytes,
+      'retentionDays': <String, Object?>{
+        'heavyArtifactsDays': retention.heavyArtifactsDays,
+        'metadataDays': retention.metadataDays,
+      },
+      if (lastSweep != null) 'lastSweep': lastSweep,
     };
   }
 
@@ -617,6 +749,10 @@ class ArtifactStore {
     await file.writeAsString(const JsonEncoder.withIndent('  ').convert(payload));
   }
 
+  void _recordPublished(String uri) {
+    observability?.recordResourcePublished(uri);
+  }
+
   Future<Map<String, Object?>?> _readJson(File file) async {
     if (!await file.exists()) {
       return null;
@@ -663,8 +799,8 @@ class ArtifactStore {
     );
   }
 
-  Future<List<_StoredArtifactEntry>> _listStoredArtifactEntries() async {
-    final entries = <_StoredArtifactEntry>[];
+  Future<List<_StoredArtifactFileEntry>> _listStoredArtifactEntriesWithStats() async {
+    final entries = <_StoredArtifactFileEntry>[];
 
     final sessionsDir = Directory(p.join(_artifactsDir, 'sessions'));
     if (await sessionsDir.exists()) {
@@ -679,7 +815,19 @@ class ArtifactStore {
           if (resolved == null) {
             continue;
           }
-          entries.add(_StoredArtifactEntry(uri: descriptor.uri, path: resolved.path));
+          final file = File(resolved.path);
+          if (!await file.exists()) {
+            continue;
+          }
+          final stat = await file.stat();
+          entries.add(
+            _StoredArtifactFileEntry(
+              uri: descriptor.uri,
+              path: resolved.path,
+              size: stat.size,
+              modified: stat.modified.toUtc(),
+            ),
+          );
         }
       }
     }
@@ -690,7 +838,19 @@ class ArtifactStore {
       if (resolved == null) {
         continue;
       }
-      entries.add(_StoredArtifactEntry(uri: descriptor.uri, path: resolved.path));
+      final file = File(resolved.path);
+      if (!await file.exists()) {
+        continue;
+      }
+      final stat = await file.stat();
+      entries.add(
+        _StoredArtifactFileEntry(
+          uri: descriptor.uri,
+          path: resolved.path,
+          size: stat.size,
+          modified: stat.modified.toUtc(),
+        ),
+      );
     }
 
     final mutationDescriptors = await listMutationResources();
@@ -699,10 +859,38 @@ class ArtifactStore {
       if (resolved == null) {
         continue;
       }
-      entries.add(_StoredArtifactEntry(uri: descriptor.uri, path: resolved.path));
+      final file = File(resolved.path);
+      if (!await file.exists()) {
+        continue;
+      }
+      final stat = await file.stat();
+      entries.add(
+        _StoredArtifactFileEntry(
+          uri: descriptor.uri,
+          path: resolved.path,
+          size: stat.size,
+          modified: stat.modified.toUtc(),
+        ),
+      );
     }
 
     return entries;
+  }
+
+  Future<int> _currentArtifactUsageBytes() async {
+    final entries = await _listStoredArtifactEntriesWithStats();
+    return entries.fold<int>(
+      0,
+      (int total, _StoredArtifactFileEntry entry) => total + entry.size,
+    );
+  }
+
+  Future<Map<String, Object?>?> _readRetentionStatus() async {
+    return _readJson(File(_retentionStatusPath));
+  }
+
+  Future<void> _writeRetentionStatus(Map<String, Object?> payload) async {
+    await _writeJson(File(_retentionStatusPath), payload);
   }
 
   Future<void> _removeEmptyArtifactDirectories() async {
@@ -858,12 +1046,16 @@ class _ResolvedStoredFile {
   final bool binary;
 }
 
-class _StoredArtifactEntry {
-  const _StoredArtifactEntry({
+class _StoredArtifactFileEntry {
+  const _StoredArtifactFileEntry({
     required this.uri,
     required this.path,
+    required this.size,
+    required this.modified,
   });
 
   final String uri;
   final String path;
+  final int size;
+  final DateTime modified;
 }

@@ -1,5 +1,6 @@
 import 'package:flutterhelm/config/config.dart';
 import 'package:flutterhelm/policies/risk.dart';
+import 'package:flutterhelm/server/support_levels.dart';
 
 class ToolDefinition {
   const ToolDefinition({
@@ -75,6 +76,10 @@ class ToolRegistry {
         'implemented': _definitions.any(
           (ToolDefinition definition) =>
               definition.workflow == workflow && definition.implemented,
+        ),
+        ...supportLevelMetadata(
+          supportLevel: workflowSupportLevel(workflow),
+          includedInStableLane: workflowIncludedInStableLane(workflow),
         ),
       };
     }

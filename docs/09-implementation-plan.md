@@ -231,7 +231,7 @@ adapters:
       families: [platformBridge]
 ```
 
-legacy adapter fields (`adapters.delegate`, `adapters.flutterCli`, `adapters.runtimeDriver`, `adapters.dtd`) は current implementation では shim で読み込み、上の registry shape に正規化します。
+legacy adapter fields (`adapters.delegate`, `adapters.flutterCli`, `adapters.runtimeDriver`, `adapters.dtd`) は stable cut で削除し、current implementation では上の registry shape のみを受け付けます。
 
 ### Phase 0 / Phase 1 runtime paths
 
@@ -293,7 +293,7 @@ Phase 6 の Sprint 9 ではさらに以下を追加します。
 
 current implementation の HTTP preview は localhost-only / request-response only です。Roots transport は unsupported なので fallback semantics を前提にします。
 
-current implementation では retention は server startup 時の age-based sweep で、pinned artifact は対象から外します。capacity-based LRU は次の sprint に送ります。
+current implementation では retention は age-based sweep の後に capacity-based LRU eviction を行い、pinned artifact は自動 sweep から外します。
 
 Phase 6 の Sprint 10 ではさらに以下を追加します。
 
@@ -309,7 +309,7 @@ Phase 6 の Sprint 11 ではさらに以下を追加します。
 
 Phase 6 の Sprint 12 ではさらに以下を追加します。
 
-- `0.1.0-phase6-beta` contract version
+- `0.2.0-stable` contract version
 - migration notes / release discipline
 - `beta` harness aggregate command
 
@@ -402,12 +402,11 @@ Phase 6 の Sprint 12 ではさらに以下を追加します。
 - `adapters.active`
 - `adapters.providers`
 - custom provider kind `stdio_json`
-- legacy adapter config shim
+- localhost-only Streamable HTTP preview
 - `--transport http`
 - `--http-host`
 - `--http-port`
 - `--http-path`
-- localhost-only Streamable HTTP preview
 - fallback-only root flow for HTTP preview
 
 ### Sprint 10
@@ -424,9 +423,29 @@ Phase 6 の Sprint 12 ではさらに以下を追加します。
 
 ### Sprint 12
 
-- `0.1.0-phase6-beta` contract version
+- `0.2.0-stable` contract version
 - migration notes / release discipline
 - `beta` harness aggregate command
+
+### Sprint 13
+
+- explicit `supportLevel` metadata
+- stable lane classification for transport / workflows / adapters
+- `stable` harness aggregate command
+
+### Sprint 14
+
+- `config://artifacts/status`
+- `config://observability/current`
+- age + capacity retention policy
+- pinned artifact immunity from LRU
+- adapter/session/resource counter surfacing
+
+### Sprint 15
+
+- legacy adapter config removal
+- stable migration notes
+- `0.2.0-stable` cut as the default public contract
 
 ## 6. Test strategy
 
@@ -489,6 +508,8 @@ Phase 6 の Sprint 12 ではさらに以下を追加します。
 - session lifecycle changes
 - resource publication metrics
 - error category counters
+- transport request counters
+- retention sweep summaries
 
 ## 9. Migration / compatibility approach
 

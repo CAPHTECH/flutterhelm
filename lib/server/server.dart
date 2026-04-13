@@ -10,6 +10,7 @@ import 'package:flutterhelm/config/config.dart';
 import 'package:flutterhelm/hardening/operation_coordinator.dart';
 import 'package:flutterhelm/hardening/tools.dart';
 import 'package:flutterhelm/launcher/tools.dart';
+import 'package:flutterhelm/observability/store.dart';
 import 'package:flutterhelm/platform_bridge/tools.dart';
 import 'package:flutterhelm/policies/approvals.dart';
 import 'package:flutterhelm/policies/audit.dart';
@@ -21,6 +22,7 @@ import 'package:flutterhelm/runtime_interaction/tools.dart';
 import 'package:flutterhelm/server/capabilities.dart';
 import 'package:flutterhelm/server/errors.dart';
 import 'package:flutterhelm/server/registry.dart';
+import 'package:flutterhelm/server/support_levels.dart';
 import 'package:flutterhelm/sessions/session.dart';
 import 'package:flutterhelm/sessions/session_store.dart';
 import 'package:flutterhelm/tests/tools.dart';
@@ -118,6 +120,7 @@ class FlutterHelmServer {
     required this.runtimePaths,
     required this.config,
     required this.stateRepository,
+    required this.observability,
     required this.auditLogger,
     required this.approvalStore,
     required this.rootPolicy,
@@ -144,6 +147,7 @@ class FlutterHelmServer {
   final RuntimePaths runtimePaths;
   final FlutterHelmConfig config;
   final StateRepository stateRepository;
+  final ObservabilityStore observability;
   final AuditLogger auditLogger;
   final ApprovalStore approvalStore;
   final RootPolicy rootPolicy;
@@ -185,7 +189,11 @@ class FlutterHelmServer {
     final state = await stateRepository.load();
     final allowRootFallback =
         allowRootFallbackFlag || config.fallbacks.allowRootFallback;
-    final artifactStore = ArtifactStore(stateDir: runtimePaths.stateDir);
+    final observability = ObservabilityStore();
+    final artifactStore = ArtifactStore(
+      stateDir: runtimePaths.stateDir,
+      observability: observability,
+    );
     final artifactPinStore = await ArtifactPinStore.create(
       stateDir: runtimePaths.stateDir,
     );
@@ -194,17 +202,22 @@ class FlutterHelmServer {
       pinnedUris: artifactPinStore.pinnedUris,
     );
     final approvalStore = await ApprovalStore.create(stateDir: runtimePaths.stateDir);
-    final sessionStore = await SessionStore.create(stateDir: runtimePaths.stateDir);
+    final sessionStore = await SessionStore.create(
+      stateDir: runtimePaths.stateDir,
+      observability: observability,
+    );
     final processRunner = const ProcessRunner();
     final adapterRegistry = AdapterRegistry(
       config: config,
       processRunner: processRunner,
+      observability: observability,
     );
     final hardeningTools = HardeningToolService(
       artifactStore: artifactStore,
       pinStore: artifactPinStore,
       processRunner: processRunner,
       configRepository: configRepository,
+      observability: observability,
     );
     final runtimeInteractionTools = RuntimeInteractionToolService(
       sessionStore: sessionStore,
@@ -226,6 +239,7 @@ class FlutterHelmServer {
       runtimePaths: runtimePaths,
       config: config,
       stateRepository: stateRepository,
+      observability: observability,
       auditLogger: AuditLogger(runtimePaths.auditFilePath),
       approvalStore: approvalStore,
       rootPolicy: RootPolicy(allowRootFallback: allowRootFallback),
@@ -246,6 +260,10 @@ class FlutterHelmServer {
           transportMode: transportMode,
         ),
         adaptersBuilder: adapterRegistry.currentResource,
+        artifactStatusBuilder: (FlutterHelmConfig config) =>
+            hardeningTools.artifactStatus(config: config),
+        observabilityBuilder: hardeningTools.observabilitySnapshot,
+        observability: observability,
       ),
       sessionStore: sessionStore,
       processRunner: processRunner,
@@ -364,6 +382,12 @@ class FlutterHelmServer {
   Future<void> _handleHttpRequest(HttpRequest request, String path) async {
     if (request.uri.path != path) {
       request.response.statusCode = HttpStatus.notFound;
+      observability.recordTransportRequest(
+        transport: 'http',
+        method: 'http:${request.method.toUpperCase()}',
+        success: false,
+        errorCode: 'HTTP_NOT_FOUND',
+      );
       await request.response.close();
       return;
     }
@@ -392,11 +416,23 @@ class FlutterHelmServer {
       case 'GET':
         request.response.statusCode = HttpStatus.methodNotAllowed;
         request.response.headers.set(HttpHeaders.allowHeader, 'POST, DELETE');
+        observability.recordTransportRequest(
+          transport: 'http',
+          method: 'http:GET',
+          success: false,
+          errorCode: 'HTTP_METHOD_NOT_ALLOWED',
+        );
         await request.response.close();
         return;
       default:
         request.response.statusCode = HttpStatus.methodNotAllowed;
         request.response.headers.set(HttpHeaders.allowHeader, 'POST, DELETE');
+        observability.recordTransportRequest(
+          transport: 'http',
+          method: 'http:${request.method.toUpperCase()}',
+          success: false,
+          errorCode: 'HTTP_METHOD_NOT_ALLOWED',
+        );
         await request.response.close();
         return;
     }
@@ -511,12 +547,22 @@ class FlutterHelmServer {
     request.response.headers.contentType = ContentType.json;
     if (responses.isEmpty) {
       request.response.statusCode = HttpStatus.accepted;
+      observability.recordTransportRequest(
+        transport: 'http',
+        method: 'http:POST',
+        success: true,
+      );
       await request.response.close();
       return;
     }
     final envelope = responses.length == 1 ? responses.single : responses;
     request.response.statusCode = HttpStatus.ok;
     request.response.write(jsonEncode(envelope));
+    observability.recordTransportRequest(
+      transport: 'http',
+      method: 'http:POST',
+      success: true,
+    );
     await request.response.close();
   }
 
@@ -552,6 +598,11 @@ class FlutterHelmServer {
       return;
     }
     request.response.statusCode = HttpStatus.noContent;
+    observability.recordTransportRequest(
+      transport: 'http',
+      method: 'http:DELETE',
+      success: true,
+    );
     await request.response.close();
   }
 
@@ -603,6 +654,12 @@ class FlutterHelmServer {
   }) async {
     request.response.statusCode = statusCode;
     request.response.headers.contentType = ContentType.json;
+    observability.recordTransportRequest(
+      transport: 'http',
+      method: 'http:${request.method.toUpperCase()}',
+      success: false,
+      errorCode: code,
+    );
     request.response.write(
       jsonEncode(<String, Object?>{
         'error': <String, Object?>{
@@ -702,12 +759,19 @@ class FlutterHelmServer {
     Map<String, Object?> params,
   ) async {
     final startedAt = DateTime.now().toUtc();
+    final failedToolName = method == 'tools/call' ? params['name'] as String? : null;
+    final requestLabel = failedToolName == null ? method : '$method:$failedToolName';
 
     try {
       switch (method) {
         case 'initialize':
           final result = _handleInitialize(context, params);
           _sendResult(emit, id, result);
+          _recordTransportRequest(
+            context: context,
+            method: requestLabel,
+            success: true,
+          );
           await _recordAudit(
             method: method,
             riskClass: RiskClass.readOnly,
@@ -717,6 +781,11 @@ class FlutterHelmServer {
           return;
         case 'ping':
           _sendResult(emit, id, <String, Object?>{});
+          _recordTransportRequest(
+            context: context,
+            method: requestLabel,
+            success: true,
+          );
           await _recordAudit(
             method: method,
             riskClass: RiskClass.readOnly,
@@ -727,6 +796,11 @@ class FlutterHelmServer {
         case 'logging/setLevel':
           _ensureInitialized(context);
           _sendResult(emit, id, <String, Object?>{});
+          _recordTransportRequest(
+            context: context,
+            method: requestLabel,
+            success: true,
+          );
           await _recordAudit(
             method: method,
             riskClass: RiskClass.readOnly,
@@ -742,6 +816,11 @@ class FlutterHelmServer {
                 .map((ToolDefinition tool) => tool.toMcpTool())
                 .toList(),
           });
+          _recordTransportRequest(
+            context: context,
+            method: requestLabel,
+            success: true,
+          );
           await _recordAudit(
             method: method,
             riskClass: RiskClass.readOnly,
@@ -764,6 +843,11 @@ class FlutterHelmServer {
             arguments,
           );
           _sendResult(emit, id, toolResult.response);
+          _recordTransportRequest(
+            context: context,
+            method: '$method:$toolName',
+            success: true,
+          );
           for (final audit in toolResult.audits) {
             await _recordAudit(
               method: method,
@@ -792,6 +876,11 @@ class FlutterHelmServer {
               .map((ResourceDescriptor resource) => resource.toJson())
               .toList();
           _sendResult(emit, id, <String, Object?>{'resources': resources});
+          _recordTransportRequest(
+            context: context,
+            method: requestLabel,
+            success: true,
+          );
           await _recordAudit(
             method: method,
             riskClass: RiskClass.readOnly,
@@ -817,6 +906,11 @@ class FlutterHelmServer {
             rootsTransportSupported: context.rootsTransportSupported,
           );
           _sendResult(emit, id, resource.toJson());
+          _recordTransportRequest(
+            context: context,
+            method: requestLabel,
+            success: true,
+          );
           await _recordAudit(
             method: method,
             riskClass: RiskClass.readOnly,
@@ -831,6 +925,12 @@ class FlutterHelmServer {
       }
     } on FlutterHelmProtocolError catch (error) {
       _sendProtocolError(emit, id, error.code, error.message, data: error.data);
+      _recordTransportRequest(
+        context: context,
+        method: requestLabel,
+        success: false,
+        errorCode: error.message,
+      );
       await _recordAudit(
         method: method,
         riskClass: RiskClass.readOnly,
@@ -841,6 +941,12 @@ class FlutterHelmServer {
     } catch (error, stackTrace) {
       if (error is FlutterHelmToolError) {
         _sendResult(emit, id, _toolErrorResponse(error));
+        _recordTransportRequest(
+          context: context,
+          method: requestLabel,
+          success: false,
+          errorCode: error.code,
+        );
         await _recordAudit(
           method: method,
           riskClass: RiskClass.readOnly,
@@ -856,6 +962,12 @@ class FlutterHelmServer {
         _log(stackTrace.toString());
       }
       _sendProtocolError(emit, id, -32603, 'Internal error');
+      _recordTransportRequest(
+        context: context,
+        method: requestLabel,
+        success: false,
+        errorCode: 'INTERNAL_ERROR',
+      );
       await _recordAudit(
         method: method,
         riskClass: RiskClass.readOnly,
@@ -935,6 +1047,7 @@ class FlutterHelmServer {
           );
           final activeAdapters = await adapterRegistry.activeAdaptersSummary();
           final structuredContent = <String, Object?>{
+            'releaseChannel': flutterHelmReleaseChannel,
             'rootsMode': snapshot.mode.wireName,
             'clientRoots': snapshot.clientRoots,
             'configuredRoots': snapshot.configuredRoots,
@@ -946,6 +1059,19 @@ class FlutterHelmServer {
                 : 'unsupported',
             'activeProfile': config.activeProfile,
             'availableProfiles': config.availableProfiles,
+            'stableHarnessTags': flutterHelmStableHarnessTags,
+            'supportLevels': <String, Object?>{
+              'transport': <String, Object?>{
+                'stdio': supportLevelMetadata(
+                  supportLevel: SupportLevel.stable,
+                  includedInStableLane: true,
+                ),
+                'http': supportLevelMetadata(
+                  supportLevel: SupportLevel.preview,
+                  includedInStableLane: false,
+                ),
+              },
+            },
             'defaults': config.defaults.toJson(),
             'configuredWorkflows': config.enabledWorkflows,
             'implementedWorkflows': _implementedWorkflows(),
@@ -962,13 +1088,17 @@ class FlutterHelmServer {
             'hotOpsOwnershipPolicy': 'owned_only',
             'adaptersResource': 'config://adapters/current',
             'compatibilityResource': 'config://compatibility/current',
+            'artifactsStatusResource': 'config://artifacts/status',
+            'observabilityResource': 'config://observability/current',
             'resources': resources
                 .where(
                   (ResourceDescriptor resource) =>
                       resource.uri == 'config://workspace/current' ||
                       resource.uri == 'config://workspace/defaults' ||
                       resource.uri == 'config://adapters/current' ||
-                      resource.uri == 'config://compatibility/current',
+                      resource.uri == 'config://compatibility/current' ||
+                      resource.uri == 'config://artifacts/status' ||
+                      resource.uri == 'config://observability/current',
                 )
                 .map((ResourceDescriptor resource) => resource.toJson())
                 .toList(),
@@ -986,7 +1116,9 @@ class FlutterHelmServer {
                       resource.uri == 'config://workspace/current' ||
                       resource.uri == 'config://workspace/defaults' ||
                       resource.uri == 'config://adapters/current' ||
-                      resource.uri == 'config://compatibility/current',
+                      resource.uri == 'config://compatibility/current' ||
+                      resource.uri == 'config://artifacts/status' ||
+                      resource.uri == 'config://observability/current',
                 )
                 .map((ResourceDescriptor resource) => resource.toResourceLink())
                 .toList(),
@@ -1011,6 +1143,16 @@ class FlutterHelmServer {
                       mimeType: 'application/json',
                       title: 'Current compatibility matrix',
                     ),
+                    _resourceLink(
+                      uri: 'config://artifacts/status',
+                      mimeType: 'application/json',
+                      title: 'Artifact storage status',
+                    ),
+                    _resourceLink(
+                      uri: 'config://observability/current',
+                      mimeType: 'application/json',
+                      title: 'Current observability snapshot',
+                    ),
                   ]
                 : const <Map<String, Object?>>[],
           );
@@ -1023,9 +1165,11 @@ class FlutterHelmServer {
                 ? '${adapters.length} adapter family entries resolved.'
                 : 'Adapter family $family resolved.',
             structuredContent: <String, Object?>{
+              'releaseChannel': flutterHelmReleaseChannel,
               'adapters': adapters,
               'deprecations': config.adapters.deprecations,
               'resource': 'config://adapters/current',
+              'stableHarnessTags': flutterHelmStableHarnessTags,
             },
             resourceLinks: <Map<String, Object?>>[
               _resourceLink(
@@ -2167,6 +2311,20 @@ class FlutterHelmServer {
         errorCode: errorCode,
         approvalRequestId: approvalRequestId,
       ),
+    );
+  }
+
+  void _recordTransportRequest({
+    required ClientSessionContext context,
+    required String method,
+    required bool success,
+    String? errorCode,
+  }) {
+    observability.recordTransportRequest(
+      transport: context.transportMode.wireName,
+      method: method,
+      success: success,
+      errorCode: errorCode,
     );
   }
 

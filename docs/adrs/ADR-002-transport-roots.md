@@ -46,11 +46,11 @@ Sprint 9 で localhost-only の Streamable HTTP preview を追加したが、こ
 
 したがって、`stdio-first, roots-aware` が基本であり、HTTP preview は local experimentation のための補助 transport に留める。
 
-## Sprint 12 update
+## Sprint 15 update
 
-Sprint 12 で beta-ready release discipline を追加したが、transport decision は変えていない。
+Sprint 15 で stable release cut を入れたが、transport decision は変えていない。
 
-- current contract version は `0.1.0-phase6-beta`
+- current contract version は `0.2.0-stable`
 - HTTP preview は引き続き localhost-only preview
 - roots-aware parity は stdio transport 側に残す
-- migration notes と deprecation surface は release discipline 側で扱う
+- migration notes と support-level taxonomy は release discipline 側で扱う

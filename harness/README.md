@@ -34,6 +34,7 @@ mise exec -- pnpm -C harness bridge
 mise exec -- pnpm -C harness interaction
 mise exec -- pnpm -C harness hardening
 mise exec -- pnpm -C harness ecosystem
+mise exec -- pnpm -C harness stable
 mise exec -- pnpm -C harness beta
 mise exec -- pnpm -C harness qa
 mise exec -- pnpm -C harness run -- --tag regression
@@ -64,8 +65,9 @@ mise exec -- pnpm -C harness report
 - `interaction`: iOS simulator で opt-in runtime driver を有効にし、screenshot / semantic interaction / hot reload-restart / attached-session guard を確認
 - `hardening`: profile overlay / compatibility preflight / artifact pin lifecycle / busy rejection を確認
 - `ecosystem`: adapter registry visibility / custom `stdio_json` provider / localhost-only HTTP preview session flow を確認
+- `stable`: `smoke`, `contracts`, `hardening`, `runtime`, `profiling`, `bridge` をまとめて回す stable support lane
 - `beta`: `smoke`, `contracts`, `hardening`, `ecosystem`, `runtime`, `profiling`, `bridge`, `interaction` をまとめて回す release-facing aggregate
 - `edge`: 実務でよく聞かれる設計質問
 - `adversarial`: 誤った前提に対する防御的回答
 
-`runtime`, `profiling`, `bridge`, `interaction` は macOS + Xcode simulator 前提のローカル専用チェックです。`hardening` と `ecosystem` は fake runtime driver / HTTP preview / sample app fixture を使うため simulator は不要ですが、Dart/Flutter toolchain は必要です。
+`runtime`, `profiling`, `bridge`, `interaction` は macOS + Xcode simulator 前提のローカル専用チェックです。`hardening` と `ecosystem` は fake runtime driver / HTTP preview / sample app fixture を使うため simulator は不要ですが、Dart/Flutter toolchain は必要です。`stable` は stdio-first の stable support lane を対象にし、HTTP preview と opt-in runtime interaction は含みません。

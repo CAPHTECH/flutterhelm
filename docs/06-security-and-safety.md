@@ -150,7 +150,7 @@ Sprint 9 の adapter registry では custom provider kind として `stdio_json`
 - host は family / operation を先に検証し、unsupported invoke をそのまま通さない
 - provider の health と active selection は `adapter_list` と `config://adapters/current` で可視化する
 - external provider は local process として扱い、trusted local tooling と同じ注意で導入する
-- legacy adapter fields は beta-ready 互換として受理するが、deprecation は `adapter_list`, `config://adapters/current`, `compatibility_check` に出す
+- legacy adapter fields は stable cut で削除したため、見つかった場合は startup で migration-guided error を返す
 
 ## 9. Native Bridge Safety
 
@@ -210,9 +210,9 @@ pin は retention sweep を止めるための明示操作であり、`config://`
 
 ## 11.2 Release / migration notes
 
-beta-ready release では、互換性のある変更を public resource で先に告知します。
+stable release では、support level と migration boundary を public resource で明示します。
 
-- legacy adapter config の deprecation は resource / tool に出す
+- legacy adapter config は stable cut で fail fast し、migration notes を参照させる
 - HTTP preview の制約は `README` と `docs/10-migration-notes.md` に明記する
 - contract version の変更は `serverInfo` と migration notes をセットで確認する
 

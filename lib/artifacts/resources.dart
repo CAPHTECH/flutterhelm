@@ -2,9 +2,11 @@ import 'dart:convert';
 
 import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/config/config.dart';
+import 'package:flutterhelm/observability/store.dart';
 import 'package:flutterhelm/policies/roots.dart';
 import 'package:flutterhelm/server/errors.dart';
 import 'package:flutterhelm/sessions/session.dart';
+import 'package:flutterhelm/server/support_levels.dart';
 
 typedef SessionHealthPayloadBuilder =
     Future<Map<String, Object?>> Function(SessionRecord session);
@@ -18,6 +20,9 @@ typedef CompatibilityPayloadBuilder =
       String transportMode,
     );
 typedef AdaptersPayloadBuilder = Future<Map<String, Object?>> Function();
+typedef ArtifactStatusPayloadBuilder =
+    Future<Map<String, Object?>> Function(FlutterHelmConfig config);
+typedef ObservabilityPayloadBuilder = Future<Map<String, Object?>> Function();
 
 class ResourceDescriptor {
   const ResourceDescriptor({
@@ -112,6 +117,9 @@ class ResourceCatalog {
     required this.pinsIndexBuilder,
     required this.compatibilityBuilder,
     required this.adaptersBuilder,
+    required this.artifactStatusBuilder,
+    required this.observabilityBuilder,
+    required this.observability,
   });
 
   final ArtifactStore artifactStore;
@@ -120,6 +128,9 @@ class ResourceCatalog {
   final JsonResourcePayloadBuilder pinsIndexBuilder;
   final CompatibilityPayloadBuilder compatibilityBuilder;
   final AdaptersPayloadBuilder adaptersBuilder;
+  final ArtifactStatusPayloadBuilder artifactStatusBuilder;
+  final ObservabilityPayloadBuilder observabilityBuilder;
+  final ObservabilityStore observability;
 
   Future<List<ResourceDescriptor>> listResources({
     required FlutterHelmConfig config,
@@ -132,6 +143,8 @@ class ResourceCatalog {
       _workspaceDefaultsDescriptor(config),
       _adaptersDescriptor(),
       _artifactPinsDescriptor(),
+      _artifactStatusDescriptor(),
+      _observabilityDescriptor(),
       _compatibilityDescriptor(),
       ...sessions.map(_sessionSummaryDescriptor),
       ...sessions.map(_sessionHealthDescriptor),
@@ -156,11 +169,13 @@ class ResourceCatalog {
     required bool rootsTransportSupported,
   }) async {
     if (uri == 'config://workspace/current') {
+      observability.recordResourceRead(uri);
       return ResourceReadResult(
         uri: uri,
         mimeType: 'application/json',
         text: jsonEncode(<String, Object?>{
           ...rootSnapshot.toJson(),
+          'releaseChannel': flutterHelmReleaseChannel,
           'activeProfile': config.activeProfile,
           'availableProfiles': config.availableProfiles,
           'transportMode': transportMode,
@@ -168,14 +183,30 @@ class ResourceCatalog {
           'rootsTransportSupport': rootsTransportSupported
               ? 'supported'
               : 'unsupported',
+          'supportLevels': <String, Object?>{
+            'transport': <String, Object?>{
+              'stdio': supportLevelMetadata(
+                supportLevel: SupportLevel.stable,
+                includedInStableLane: true,
+              ),
+              'http': supportLevelMetadata(
+                supportLevel: SupportLevel.preview,
+                includedInStableLane: false,
+              ),
+            },
+          },
           'adaptersResource': 'config://adapters/current',
           'compatibilityResource': 'config://compatibility/current',
+          'artifactsStatusResource': 'config://artifacts/status',
+          'observabilityResource': 'config://observability/current',
+          'stableHarnessTags': flutterHelmStableHarnessTags,
           'updatedAt': state.updatedAt?.toUtc().toIso8601String(),
         }),
       );
     }
 
     if (uri == 'config://workspace/defaults') {
+      observability.recordResourceRead(uri);
       return ResourceReadResult(
         uri: uri,
         mimeType: 'application/json',
@@ -184,6 +215,7 @@ class ResourceCatalog {
     }
 
     if (uri == 'config://artifacts/pins') {
+      observability.recordResourceRead(uri);
       return ResourceReadResult(
         uri: uri,
         mimeType: 'application/json',
@@ -191,7 +223,17 @@ class ResourceCatalog {
       );
     }
 
+    if (uri == 'config://artifacts/status') {
+      observability.recordResourceRead(uri);
+      return ResourceReadResult(
+        uri: uri,
+        mimeType: 'application/json',
+        text: jsonEncode(await artifactStatusBuilder(config)),
+      );
+    }
+
     if (uri == 'config://adapters/current') {
+      observability.recordResourceRead(uri);
       return ResourceReadResult(
         uri: uri,
         mimeType: 'application/json',
@@ -200,12 +242,22 @@ class ResourceCatalog {
     }
 
     if (uri == 'config://compatibility/current') {
+      observability.recordResourceRead(uri);
       return ResourceReadResult(
         uri: uri,
         mimeType: 'application/json',
         text: jsonEncode(
           await compatibilityBuilder(config, state, transportMode),
         ),
+      );
+    }
+
+    if (uri == 'config://observability/current') {
+      observability.recordResourceRead(uri);
+      return ResourceReadResult(
+        uri: uri,
+        mimeType: 'application/json',
+        text: jsonEncode(await observabilityBuilder()),
       );
     }
 
@@ -262,6 +314,7 @@ class ResourceCatalog {
 
     final stored = await artifactStore.readStoredResource(uri);
     if (stored != null) {
+      observability.recordResourceRead(uri);
       return stored;
     }
 
@@ -311,6 +364,19 @@ class ResourceCatalog {
     );
   }
 
+  ResourceDescriptor _artifactStatusDescriptor() {
+    final now = DateTime.now().toUtc();
+    return ResourceDescriptor(
+      uri: 'config://artifacts/status',
+      name: 'artifacts.status',
+      title: 'Artifact storage status',
+      description: 'Current artifact usage, retention, and capacity status.',
+      mimeType: 'application/json',
+      createdAt: now,
+      lastModified: now,
+    );
+  }
+
   ResourceDescriptor _adaptersDescriptor() {
     final now = DateTime.now().toUtc();
     return ResourceDescriptor(
@@ -318,6 +384,19 @@ class ResourceCatalog {
       name: 'adapters.current',
       title: 'Current adapter registry state',
       description: 'Active provider selection and provider health by family.',
+      mimeType: 'application/json',
+      createdAt: now,
+      lastModified: now,
+    );
+  }
+
+  ResourceDescriptor _observabilityDescriptor() {
+    final now = DateTime.now().toUtc();
+    return ResourceDescriptor(
+      uri: 'config://observability/current',
+      name: 'observability.current',
+      title: 'Current observability snapshot',
+      description: 'Runtime counters and timing aggregates for the current process.',
       mimeType: 'application/json',
       createdAt: now,
       lastModified: now,

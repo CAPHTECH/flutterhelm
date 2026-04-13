@@ -5,13 +5,15 @@ import 'package:flutterhelm/artifacts/pins.dart';
 import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/config/config.dart';
 import 'package:flutterhelm/hardening/tools.dart';
+import 'package:flutterhelm/observability/store.dart';
+import 'package:flutterhelm/server/support_levels.dart';
 import 'package:flutterhelm/utils/process_runner.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 void main() {
   group('AdapterRegistry', () {
-    test('surfaces legacy adapter deprecations in current resources and compatibility checks', () async {
+    test('surfaces support metadata in current resources and compatibility checks', () async {
       final tempDir = await Directory.systemTemp.createTemp(
         'flutterhelm-adapter-registry',
       );
@@ -21,17 +23,6 @@ void main() {
       final config = FlutterHelmConfig.fromYamlText('''
 version: 1
 adapters:
-  delegate:
-    type: dart_flutter_mcp
-  flutterCli:
-    executable: flutter
-  runtimeDriver:
-    enabled: true
-    command: dart
-    args:
-      - run
-      - ${providerScript.path}
-      - healthy
   active:
     runtimeDriver: custom.runtime.driver
   providers:
@@ -50,13 +41,15 @@ adapters:
         processRunner: const ProcessRunner(),
       );
       final currentResource = await registry.currentResource();
-      expect(currentResource['deprecations'], isNotEmpty);
+      expect(currentResource['releaseChannel'], flutterHelmReleaseChannel);
       final providerStates =
           currentResource['providerStates'] as Map<String, Object?>;
       final customState = providerStates['custom.runtime.driver']
           as Map<String, Object?>;
       expect(customState['state'], 'healthy');
       expect(customState['healthy'], isTrue);
+      expect(customState['supportLevel'], SupportLevel.beta.name);
+      expect(customState['includedInStableLane'], isFalse);
 
       final compatibility = await (await _buildHardeningService(tempDir))
           .compatibilityCheck(
@@ -64,16 +57,16 @@ adapters:
             activeRoot: tempDir.path,
             transportMode: 'stdio',
           );
-      expect(compatibility['deprecations'], isNotEmpty);
+      expect(compatibility['releaseChannel'], flutterHelmReleaseChannel);
       final adapters = compatibility['adapters'] as Map<String, Object?>;
-      expect(adapters['deprecations'], isNotEmpty);
+      expect(adapters['deprecations'], isEmpty);
       final providerStatesFromCompatibility =
           adapters['providerStates'] as Map<String, Object?>;
-      expect(
-        (providerStatesFromCompatibility['custom.runtime.driver']
-                as Map<String, Object?>)['state'],
-        'healthy',
-      );
+      final compatibilityState =
+          providerStatesFromCompatibility['custom.runtime.driver']
+              as Map<String, Object?>;
+      expect(compatibilityState['state'], 'healthy');
+      expect(compatibilityState['supportLevel'], SupportLevel.beta.name);
     });
 
     test('backs off and retries stdio_json providers lazily', () async {
@@ -133,6 +126,7 @@ Future<HardeningToolService> _buildHardeningService(Directory tempDir) async {
     artifactStore: ArtifactStore(stateDir: stateDir),
     pinStore: pinStore,
     processRunner: const ProcessRunner(),
+    observability: ObservabilityStore(),
     configRepository: ConfigRepository(
       RuntimePaths(
         configPath: p.join(tempDir.path, 'config.yaml'),

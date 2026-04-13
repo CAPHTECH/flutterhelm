@@ -106,14 +106,17 @@ class RetentionConfig {
   const RetentionConfig({
     required this.heavyArtifactsDays,
     required this.metadataDays,
+    required this.maxArtifactBytes,
   });
 
   final int heavyArtifactsDays;
   final int metadataDays;
+  final int maxArtifactBytes;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'heavyArtifactsDays': heavyArtifactsDays,
     'metadataDays': metadataDays,
+    'maxArtifactBytes': maxArtifactBytes,
   };
 }
 
@@ -260,15 +263,6 @@ class AdaptersConfig {
       for (final entry in providers.entries) entry.key: entry.value.toJson(),
     },
     if (deprecations.isNotEmpty) 'deprecations': deprecations,
-    'delegate': <String, Object?>{'type': delegateType},
-    'flutterCli': <String, Object?>{'executable': flutterExecutable},
-    'dtd': <String, Object?>{'enabled': dtdEnabled},
-    'runtimeDriver': <String, Object?>{
-      'enabled': runtimeDriverEnabled,
-      'command': runtimeDriverCommand,
-      'args': runtimeDriverArgs,
-      'startupTimeoutMs': runtimeDriverStartupTimeoutMs,
-    },
   };
 }
 
@@ -314,7 +308,11 @@ class FlutterHelmConfig {
       defaults: const DefaultsConfig(target: 'lib/main.dart', mode: 'debug'),
       enabledWorkflows: defaultWorkflows,
       fallbacks: const FallbacksConfig(allowRootFallback: false),
-      retention: const RetentionConfig(heavyArtifactsDays: 7, metadataDays: 30),
+      retention: const RetentionConfig(
+        heavyArtifactsDays: 7,
+        metadataDays: 30,
+        maxArtifactBytes: 536870912,
+      ),
       safety: const SafetyConfig(
         confirmBefore: <String>[
           'dependency_add',
@@ -388,36 +386,19 @@ class FlutterHelmConfig {
     final retention = _mapValue(resolvedRoot['retention']);
     final safety = _mapValue(resolvedRoot['safety']);
     final adapters = _mapValue(resolvedRoot['adapters']);
-    final delegateType =
-        _stringValue(_mapValue(adapters['delegate'])['type']) ??
-        'dart_flutter_mcp';
-    final flutterExecutable =
-        _stringValue(_mapValue(adapters['flutterCli'])['executable']) ??
-        'flutter';
-    final dtdEnabled = _boolValue(_mapValue(adapters['dtd'])['enabled']) ?? true;
-    final runtimeDriverEnabled =
-        _boolValue(_mapValue(adapters['runtimeDriver'])['enabled']) ?? false;
-    final runtimeDriverCommand =
-        _stringValue(_mapValue(adapters['runtimeDriver'])['command']) ?? 'npx';
-    final runtimeDriverArgs =
-        _stringList(_mapValue(adapters['runtimeDriver'])['args']) ??
-        const <String>[
-          '-y',
-          '@mobilenext/mobile-mcp@latest',
-          '--stdio',
-        ];
-    final runtimeDriverStartupTimeoutMs =
-        _intValue(_mapValue(adapters['runtimeDriver'])['startupTimeoutMs']) ??
-        5000;
-    final deprecations = _detectAdapterDeprecations(adapters);
+    _ensureNoRemovedAdapterFields(adapters);
     final defaultProviders = AdaptersConfig.defaultProviders(
-      delegateType: delegateType,
-      flutterExecutable: flutterExecutable,
-      dtdEnabled: dtdEnabled,
-      runtimeDriverEnabled: runtimeDriverEnabled,
-      runtimeDriverCommand: runtimeDriverCommand,
-      runtimeDriverArgs: runtimeDriverArgs,
-      runtimeDriverStartupTimeoutMs: runtimeDriverStartupTimeoutMs,
+      delegateType: 'dart_flutter_mcp',
+      flutterExecutable: 'flutter',
+      dtdEnabled: true,
+      runtimeDriverEnabled: false,
+      runtimeDriverCommand: 'npx',
+      runtimeDriverArgs: const <String>[
+        '-y',
+        '@mobilenext/mobile-mcp@latest',
+        '--stdio',
+      ],
+      runtimeDriverStartupTimeoutMs: 5000,
     );
     final configuredProviders = _parseProviderConfigs(_mapValue(adapters['providers']));
     final providers = <String, AdapterProviderConfig>{
@@ -428,6 +409,33 @@ class FlutterHelmConfig {
       ...AdaptersConfig.defaultActiveProviders,
       ..._stringMap(_mapValue(adapters['active'])),
     };
+    final delegateType = _stringValue(
+          providers['builtin.delegate.workspace']?.options['type'],
+        ) ??
+        'dart_flutter_mcp';
+    final flutterExecutable = _stringValue(
+          providers['builtin.flutter.cli']?.options['executable'],
+        ) ??
+        'flutter';
+    final dtdEnabled =
+        _boolValue(providers['builtin.flutter.cli']?.options['dtdEnabled']) ??
+        true;
+    final runtimeDriverEnabled = _boolValue(
+          providers['builtin.runtime_driver.external_process']?.options['enabled'],
+        ) ??
+        false;
+    final runtimeDriverCommand =
+        providers['builtin.runtime_driver.external_process']?.command ?? 'npx';
+    final runtimeDriverArgs =
+        providers['builtin.runtime_driver.external_process']?.args ??
+        const <String>[
+          '-y',
+          '@mobilenext/mobile-mcp@latest',
+          '--stdio',
+        ];
+    final runtimeDriverStartupTimeoutMs =
+        providers['builtin.runtime_driver.external_process']?.startupTimeoutMs ??
+        5000;
 
     return FlutterHelmConfig(
       version: version,
@@ -446,6 +454,7 @@ class FlutterHelmConfig {
       retention: RetentionConfig(
         heavyArtifactsDays: _intValue(retention['heavyArtifactsDays']) ?? 7,
         metadataDays: _intValue(retention['metadataDays']) ?? 30,
+        maxArtifactBytes: _intValue(retention['maxArtifactBytes']) ?? 536870912,
       ),
       safety: SafetyConfig(
         confirmBefore:
@@ -467,7 +476,7 @@ class FlutterHelmConfig {
         runtimeDriverStartupTimeoutMs: runtimeDriverStartupTimeoutMs,
         activeProviders: activeProviders,
         providers: providers,
-        deprecations: deprecations,
+        deprecations: const <Map<String, Object?>>[],
       ),
       activeProfile: selectedProfile,
       availableProfiles: availableProfiles,
@@ -642,56 +651,26 @@ Map<String, AdapterProviderConfig> _parseProviderConfigs(
   return providers;
 }
 
-List<Map<String, Object?>> _detectAdapterDeprecations(
-  Map<String, Object?> adapters,
-) {
-  final deprecations = <Map<String, Object?>>[];
-  void add({
-    required String field,
-    required String replacement,
-    required String message,
-  }) {
-    deprecations.add(<String, Object?>{
-      'field': field,
-      'replacement': replacement,
-      'message': message,
-      'severity': 'warning',
-    });
+void _ensureNoRemovedAdapterFields(Map<String, Object?> adapters) {
+  const removedFields = <String>[
+    'delegate',
+    'flutterCli',
+    'dtd',
+    'runtimeDriver',
+  ];
+  final detected = removedFields
+      .where((String field) => adapters.containsKey(field))
+      .map((String field) => 'adapters.$field')
+      .toList();
+  if (detected.isEmpty) {
+    return;
   }
-
-  if (adapters.containsKey('delegate')) {
-    add(
-      field: 'adapters.delegate',
-      replacement: 'adapters.active / adapters.providers',
-      message:
-          'Legacy delegate adapter settings are shimmed for now; prefer the registry shape.',
-    );
-  }
-  if (adapters.containsKey('flutterCli')) {
-    add(
-      field: 'adapters.flutterCli',
-      replacement: 'adapters.active / adapters.providers',
-      message:
-          'Legacy Flutter CLI adapter settings are shimmed for now; prefer the registry shape.',
-    );
-  }
-  if (adapters.containsKey('dtd')) {
-    add(
-      field: 'adapters.dtd',
-      replacement: 'adapters.active / adapters.providers',
-      message:
-          'Legacy DTD adapter settings are shimmed for now; prefer the registry shape.',
-    );
-  }
-  if (adapters.containsKey('runtimeDriver')) {
-    add(
-      field: 'adapters.runtimeDriver',
-      replacement: 'adapters.active / adapters.providers',
-      message:
-          'Legacy runtimeDriver adapter settings are shimmed for now; prefer the registry shape.',
-    );
-  }
-  return deprecations;
+  throw ConfigException(
+    'Legacy adapter config fields are no longer supported in 0.2.0-stable: '
+    '${detected.join(', ')}. '
+    'Use adapters.active / adapters.providers instead. '
+    'See docs/10-migration-notes.md.',
+  );
 }
 
 String? _stringValue(Object? value) {
