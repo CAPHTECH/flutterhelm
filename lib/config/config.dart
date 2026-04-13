@@ -151,6 +151,28 @@ class AdapterProviderConfig {
   final bool builtin;
   final Map<String, Object?> options;
 
+  AdapterProviderConfig copyWith({
+    String? id,
+    String? kind,
+    List<String>? families,
+    String? command,
+    List<String>? args,
+    int? startupTimeoutMs,
+    bool? builtin,
+    Map<String, Object?>? options,
+  }) {
+    return AdapterProviderConfig(
+      id: id ?? this.id,
+      kind: kind ?? this.kind,
+      families: families ?? this.families,
+      command: command ?? this.command,
+      args: args ?? this.args,
+      startupTimeoutMs: startupTimeoutMs ?? this.startupTimeoutMs,
+      builtin: builtin ?? this.builtin,
+      options: options ?? this.options,
+    );
+  }
+
   Map<String, Object?> toJson() {
     return <String, Object?>{
       'kind': kind,
@@ -395,6 +417,8 @@ class FlutterHelmConfig {
     final safety = _mapValue(resolvedRoot['safety']);
     final adapters = _mapValue(resolvedRoot['adapters']);
     _ensureNoRemovedAdapterFields(adapters);
+    final rawActiveProviders = _mapValue(adapters['active']);
+    final rawProviders = _mapValue(adapters['providers']);
     final defaultProviders = AdaptersConfig.defaultProviders(
       delegateType: 'dart_flutter_mcp',
       flutterExecutable: 'flutter',
@@ -415,8 +439,31 @@ class FlutterHelmConfig {
     };
     final activeProviders = <String, String>{
       ...AdaptersConfig.defaultActiveProviders,
-      ..._stringMap(_mapValue(adapters['active'])),
+      ..._stringMap(rawActiveProviders),
     };
+    final explicitRuntimeDriverSelection =
+        rawActiveProviders.containsKey('runtimeDriver');
+    final selectedRuntimeDriverProviderId =
+        activeProviders['runtimeDriver'] ??
+        AdaptersConfig.defaultActiveProviders['runtimeDriver']!;
+    final runtimeDriverEnabledExplicit = _providerOptionExplicit(
+      rawProviders,
+      selectedRuntimeDriverProviderId,
+      'enabled',
+    );
+    if (explicitRuntimeDriverSelection && !runtimeDriverEnabledExplicit) {
+      final selectedRuntimeDriverProvider = providers[selectedRuntimeDriverProviderId];
+      if (selectedRuntimeDriverProvider != null &&
+          selectedRuntimeDriverProvider.families.contains('runtimeDriver')) {
+        providers[selectedRuntimeDriverProviderId] =
+            selectedRuntimeDriverProvider.copyWith(
+              options: <String, Object?>{
+                ...selectedRuntimeDriverProvider.options,
+                'enabled': true,
+              },
+            );
+      }
+    }
     final delegateType = _stringValue(
           providers['builtin.delegate.workspace']?.options['type'],
         ) ??
@@ -505,6 +552,19 @@ class FlutterHelmConfig {
       'availableProfiles': availableProfiles,
     };
   }
+}
+
+bool _providerOptionExplicit(
+  Map<String, Object?> rawProviders,
+  String providerId,
+  String option,
+) {
+  final provider = _mapValue(rawProviders[providerId]);
+  if (provider.isEmpty) {
+    return false;
+  }
+  final options = _mapValue(provider['options']);
+  return options.containsKey(option);
 }
 
 class ConfigRepository {

@@ -140,6 +140,30 @@ adapters:
       expect(config.adapters.deprecations, isEmpty);
     });
 
+    test(
+      'auto-enables an explicitly selected runtime driver when enabled is omitted',
+      () {
+        final config = FlutterHelmConfig.fromYamlText('''
+version: 1
+enabledWorkflows:
+  - workspace
+  - session
+  - launcher
+  - runtime_readonly
+  - runtime_interaction
+adapters:
+  active:
+    runtimeDriver: builtin.runtime_driver.external_process
+''');
+
+        expect(config.adapters.runtimeDriverEnabled, isTrue);
+        expect(
+          config.adapters.providerForFamily('runtimeDriver')?.options['enabled'],
+          isTrue,
+        );
+      },
+    );
+
     test('rejects unsupported config versions', () {
       expect(
         () => FlutterHelmConfig.fromYamlText('version: 2'),

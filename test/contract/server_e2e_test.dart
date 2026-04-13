@@ -1529,12 +1529,22 @@ adapters:
         final healthDecoded =
             jsonDecode(healthBody['text'] as String) as Map<String, Object?>;
         expect(healthDecoded['driverConfigured'], isTrue);
+        expect(healthDecoded['driverConnected'], isTrue);
+        expect(healthDecoded['runtimeInteractionReady'], isTrue);
+        expect(healthDecoded['screenshotReady'], isTrue);
 
         final screenshot = await client.request('tools/call', <String, Object?>{
           'name': 'capture_screenshot',
           'arguments': <String, Object?>{'sessionId': sessionId},
         });
         expect(screenshot['isError'], isFalse);
+        final screenshotStructured =
+            screenshot['structuredContent'] as Map<Object?, Object?>;
+        expect(screenshotStructured['driverConnected'], isTrue);
+        expect(screenshotStructured['fallbackUsed'], isA<bool>());
+        if (screenshotStructured['fallbackUsed'] == true) {
+          expect(screenshotStructured['fallbackReason'], isNotNull);
+        }
 
         final tap = await client.request('tools/call', <String, Object?>{
           'name': 'tap_widget',
@@ -1800,12 +1810,154 @@ adapters:
           'arguments': <String, Object?>{'sessionId': sessionId},
         });
         expect(screenshot['isError'], isFalse);
+        final screenshotStructured =
+            screenshot['structuredContent'] as Map<Object?, Object?>;
+        expect(screenshotStructured['backend'], 'external_adapter');
+        expect(screenshotStructured['driverConnected'], isTrue);
+        expect(screenshotStructured['fallbackUsed'], isFalse);
+        expect(screenshotStructured.containsKey('fallbackReason'), isFalse);
         final screenshotUri =
-            (((screenshot['structuredContent'] as Map<Object?, Object?>)['resource']
+            ((screenshotStructured['resource']
                     as Map<Object?, Object?>)['uri'])
                 as String;
         expect(screenshotUri, startsWith('screenshot://$sessionId/'));
       },
+    );
+
+    test(
+      'reports runtime interaction readiness and screenshot fallback when the driver is disabled',
+      () async {
+        final sandbox = await Directory.systemTemp.createTemp(
+          'flutterhelm-runtime-driver-disabled',
+        );
+        addTearDown(() => sandbox.delete(recursive: true));
+
+        final stateDir = Directory(p.join(sandbox.path, 'state'));
+        final sampleAppRoot = p.join(
+          Directory.current.path,
+          'fixtures',
+          'sample_app',
+        );
+        final configPath = await _writeConfigFile(
+          p.join(sandbox.path, 'config.yaml'),
+          '''
+version: 1
+enabledWorkflows:
+  - workspace
+  - session
+  - launcher
+  - runtime_readonly
+  - runtime_interaction
+  - profiling
+  - platform_bridge
+  - tests
+adapters:
+  active:
+    runtimeDriver: builtin.runtime_driver.external_process
+  providers:
+    builtin.runtime_driver.external_process:
+      kind: builtin
+      families:
+        - runtimeDriver
+      command: npx
+      args:
+        - -y
+        - "@mobilenext/mobile-mcp@latest"
+        - --stdio
+      startupTimeoutMs: 15000
+      options:
+        enabled: false
+''',
+        );
+        final client = await _TestMcpClient.start(
+          repoRoot: Directory.current.path,
+          workspaceRoot: sampleAppRoot,
+          stateDir: stateDir.path,
+          configPath: configPath,
+        );
+        addTearDown(client.close);
+
+        await _initializeClient(client);
+        await client.request('tools/call', <String, Object?>{
+          'name': 'workspace_set_root',
+          'arguments': <String, Object?>{'workspaceRoot': sampleAppRoot},
+        });
+
+        final running = await client.request(
+          'tools/call',
+          <String, Object?>{
+            'name': 'run_app',
+            'arguments': <String, Object?>{
+              'platform': 'ios',
+              'mode': 'debug',
+              'dartDefines': <String>['FLUTTERHELM_SCENARIO=interaction_demo'],
+            },
+          },
+          const Duration(minutes: 8),
+        );
+        expect(running['isError'], isFalse);
+        final sessionId =
+            ((running['structuredContent'] as Map<Object?, Object?>)['sessionId'])
+                as String;
+
+        addTearDown(() async {
+          final stopResult = await client.request('tools/call', <String, Object?>{
+            'name': 'stop_app',
+            'arguments': <String, Object?>{'sessionId': sessionId},
+          });
+          if (stopResult['isError'] == true) {
+            stderr.writeln(
+              'stop_app during teardown failed: ${stopResult['structuredContent']}',
+            );
+          }
+        });
+
+        final health = await client.request(
+          'resources/read',
+          <String, Object?>{'uri': 'session://$sessionId/health'},
+        );
+        final healthBody =
+            (health['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        final healthDecoded =
+            jsonDecode(healthBody['text'] as String) as Map<String, Object?>;
+        expect(healthDecoded['ready'], isFalse);
+        expect(healthDecoded['runtimeDriverEnabled'], isFalse);
+        expect(healthDecoded['runtimeInteractionReady'], isFalse);
+        expect(healthDecoded['screenshotReady'], isTrue);
+        expect(
+          (healthDecoded['issues'] as List<Object?>).contains(
+            'runtime driver is disabled',
+          ),
+          isTrue,
+        );
+
+        final screenshot = await client.request('tools/call', <String, Object?>{
+          'name': 'capture_screenshot',
+          'arguments': <String, Object?>{'sessionId': sessionId},
+        });
+        expect(screenshot['isError'], isFalse);
+        final screenshotStructured =
+            screenshot['structuredContent'] as Map<Object?, Object?>;
+        expect(screenshotStructured['backend'], 'ios_simctl');
+        expect(screenshotStructured['driverConnected'], isFalse);
+        expect(screenshotStructured['fallbackUsed'], isTrue);
+        expect(screenshotStructured['fallbackReason'], isNotNull);
+
+        final tap = await client.request('tools/call', <String, Object?>{
+          'name': 'tap_widget',
+          'arguments': <String, Object?>{
+            'sessionId': sessionId,
+            'locator': <String, Object?>{'text': 'Tap primary'},
+          },
+        });
+        expect(tap['isError'], isTrue);
+        final tapError =
+            ((tap['structuredContent'] as Map<Object?, Object?>)['error'])
+                as Map<Object?, Object?>;
+        expect(tapError['code'], 'RUNTIME_DRIVER_UNAVAILABLE');
+      },
+      timeout: const Timeout(Duration(minutes: 12)),
     );
 
     test(

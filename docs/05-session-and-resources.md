@@ -372,11 +372,11 @@ Tool は極力この形で返します。
 ```json
 {
   "sessionId": "sess_01H...",
-  "ready": true,
-  "issues": [],
+  "ready": false,
+  "issues": ["runtime driver is disabled"],
   "guidance": [
     "Profile mode is recommended for performance measurements.",
-    "DTD is not available; FlutterHelm will use vm_service-backed profiling."
+    "Enable the selected runtime driver provider before using tap_widget, enter_text, or scroll_until_visible."
   ],
   "ownership": "owned",
   "stale": false,
@@ -387,10 +387,13 @@ Tool は極力この形で返します。
   "dtdAvailable": false,
   "backend": "vm_service",
   "profileActive": false,
-  "runtimeDriverEnabled": true,
+  "profilingReady": true,
+  "runtimeInteractionReady": false,
+  "screenshotReady": true,
+  "runtimeDriverEnabled": false,
   "driverConfigured": true,
-  "driverConnected": true,
-  "driverName": "mobile-mcp",
+  "driverConnected": false,
+  "driverName": null,
   "driverCapabilities": {
     "backend": "external_adapter",
     "supportedPlatforms": ["ios"],
@@ -403,7 +406,8 @@ Tool は極力この形で返します。
 ```
 
 この resource は profiling failure の `detailsResource` としても使われます。  
-attached / stale / release session では `issues` と `guidance` が増え、なぜ profiling や hot op が拒否されたかを short error とは別に読めます。runtime interaction を有効化した場合は driver の接続状態と supported locator fields もここに集約されます。
+attached / stale / release session では `issues` と `guidance` が増え、なぜ profiling や hot op が拒否されたかを short error とは別に読めます。runtime interaction を有効化した場合は driver の接続状態と supported locator fields もここに集約されます。  
+`ready` は総合状態、`profilingReady` / `runtimeInteractionReady` / `screenshotReady` は capability ごとの readiness として見ます。
 
 ## 14. このモデルの効用
 

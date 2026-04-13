@@ -208,6 +208,31 @@ adapters:
     runtimeDriver: builtin.runtime_driver.external_process
 ```
 
+`runtimeDriver` を explicit に選ぶと、selected provider は自動的に有効化されます。  
+逆に明示的に無効化したい場合だけ、provider 側で `options.enabled: false` を指定します。
+
+```yaml
+adapters:
+  providers:
+    builtin.runtime_driver.external_process:
+      kind: builtin
+      families:
+        - runtimeDriver
+      options:
+        enabled: false
+```
+
+接続確認は `session://<session-id>/health` で行います。  
+特に見る field は次です。
+
+- `runtimeInteractionReady`
+- `screenshotReady`
+- `driverConnected`
+- `supportedLocatorFields`
+
+`capture_screenshot` の result には `backend`, `driverConnected`, `fallbackUsed`, `fallbackReason?` が含まれます。  
+driver 接続中でも `fallbackUsed=true` なら、最終的な screenshot は fallback backend で取得されています。
+
 ### 9.2 custom `stdio_json` provider
 
 custom provider も `beta` です。  

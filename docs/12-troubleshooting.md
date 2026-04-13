@@ -27,7 +27,7 @@
 | `ROOTS_MISMATCH` | client roots 外を触ろうとしている | roots-aware client なら roots を見直し、そうでなければ `--allow-root-fallback` の是非を判断する |
 | `SESSION_STALE` | server 再起動後に古い session metadata だけ残っている | `session_list` で stale を確認し、必要なら `run_app` か `attach_app` で新しい live session を作る |
 | `SESSION_NOT_RUNNING` | 停止済み / failed session に対して live-only tool を使っている | `session://<id>/health` を見て状態を確認し、必要なら再起動する |
-| `RUNTIME_DRIVER_UNAVAILABLE` / `RUNTIME_DRIVER_NOT_CONNECTED` | `runtime_interaction` が無効、または driver provider が不健康 | `enabledWorkflows`、`adapter_list`、`config://adapters/current` を確認する |
+| `RUNTIME_DRIVER_UNAVAILABLE` / `RUNTIME_DRIVER_NOT_CONNECTED` | `runtime_interaction` が無効、driver が disabled、provider が未設定、または接続不良 | `enabledWorkflows`、`adapter_list`、`config://adapters/current`、`session://<session-id>/health` を確認する |
 | `SEMANTIC_LOCATOR_NOT_FOUND` / `SEMANTIC_LOCATOR_AMBIGUOUS` / `SEMANTIC_LOCATOR_UNSUPPORTED` | locator が弱い、または provider がその field をサポートしていない | `label`, `valueKey`, `type`, `index` を見直し、provider の `supportedLocatorFields` を確認する |
 | profiling tool が失敗する | owned session ではない、stale、VM service がない、mode が不適切 | `session://<id>/health` を開き、`ownership`, `stale`, `vmServiceAvailable`, `currentMode` を確認する |
 | `ADAPTER_PROVIDER_UNHEALTHY` / `ADAPTER_INVOKE_FAILED` | custom `stdio_json` provider が落ちた、timeout、handshake failure | `adapter_list` と `config://adapters/current` の `healthy` / lifecycle state / reason を確認する |
@@ -97,7 +97,18 @@ session metadata は永続化されますが、live process handle は process l
 - `config://adapters/current`
 - `session://<session-id>/health`
 
+`session://<session-id>/health` では、少なくとも次を見ます。
+
+- `runtimeDriverEnabled`
+- `driverConnected`
+- `runtimeInteractionReady`
+- `screenshotReady`
+
+`runtimeDriver` を explicit に選んだだけなら自動的に有効化されます。  
+無効化したい場合だけ provider 側で `options.enabled: false` を指定します。
+
 driver に依存しない `capture_screenshot` でも、iOS simulator 以外では fallback がない場合があります。  
+result の `backend` と `fallbackUsed` を見ると、driver 経由か fallback 経由かを判別できます。
 stable path だけで進めるなら、runtime interaction を無理に有効化せず `runtime_readonly` と profiling / native handoff を中心に使ってください。
 
 ## 8. Profiling が使えない時

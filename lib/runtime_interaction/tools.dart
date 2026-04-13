@@ -156,6 +156,21 @@ class RuntimeInteractionToolService {
     final status = await driverStatus(platform: session.platform);
     final issues = <String>[];
     final guidance = <String>[];
+    final profilingReady =
+        session.ownership == SessionOwnership.owned &&
+        !session.stale &&
+        session.state == SessionState.running &&
+        session.vmServiceAvailable &&
+        session.mode != 'release';
+    final runtimeInteractionReady =
+        workflowEnabled &&
+        driverEnabled &&
+        status.configured &&
+        status.connected &&
+        !session.stale &&
+        session.state == SessionState.running;
+    final screenshotReady =
+        runtimeInteractionReady || _canFallbackScreenshot(session);
 
     if (session.stale) {
       issues.add('session is stale');
@@ -196,7 +211,18 @@ class RuntimeInteractionToolService {
     if (!workflowEnabled) {
       guidance.add('runtime_interaction workflow is disabled; UI actions are intentionally opt-in.');
     }
-    if (driverEnabled && status.configured && !status.connected) {
+    if (workflowEnabled && !driverEnabled) {
+      issues.add('runtime driver is disabled');
+      guidance.add(
+        'Enable the selected runtime driver provider before using tap_widget, enter_text, or scroll_until_visible.',
+      );
+    } else if (workflowEnabled && !status.configured) {
+      issues.add('runtime driver is not configured');
+      guidance.add(
+        'Configure an active runtimeDriver provider before using runtime interaction tools.',
+      );
+    } else if (driverEnabled && status.configured && !status.connected) {
+      issues.add('runtime driver is not connected');
       guidance.add('Runtime driver is configured but not connected; UI actions will fail until it is reachable.');
     } else if (!driverEnabled) {
       guidance.add('Runtime driver is disabled; screenshot fallback may still work on iOS simulator.');
@@ -216,6 +242,9 @@ class RuntimeInteractionToolService {
       'dtdAvailable': session.dtdAvailable,
       'backend': 'vm_service',
       'profileActive': session.profileActive,
+      'profilingReady': profilingReady,
+      'runtimeInteractionReady': runtimeInteractionReady,
+      'screenshotReady': screenshotReady,
       if (session.nativeContext != null) 'nativeContext': session.nativeContext!.toJson(),
       'nativeBuildAttached': session.nativeContext != null,
       'nativeLaunchStatus': session.nativeContext?.launchStatus,
@@ -243,8 +272,11 @@ class RuntimeInteractionToolService {
     );
 
     var backend = 'external_adapter';
+    var driverConnected = false;
+    String? fallbackReason;
     try {
       final runtimeDriver = await _driverAdapter.health();
+      driverConnected = runtimeDriver.connected;
       if (runtimeDriver.connected) {
         final deviceId = _requireDevice(session);
         await _driverAdapter.captureScreenshot(
@@ -258,6 +290,7 @@ class RuntimeInteractionToolService {
         );
         if (!artifactReady) {
           backend = 'ios_simctl';
+          fallbackReason = 'driver_artifact_missing';
           await _captureScreenshotViaFallback(
             session: session,
             targetPath: targetPath,
@@ -270,6 +303,7 @@ class RuntimeInteractionToolService {
         }
       } else {
         backend = 'ios_simctl';
+        fallbackReason = 'driver_not_connected';
         await _captureScreenshotViaFallback(
           session: session,
           targetPath: targetPath,
@@ -282,6 +316,7 @@ class RuntimeInteractionToolService {
       }
     } catch (_) {
       backend = 'ios_simctl';
+      fallbackReason ??= 'driver_capture_failed';
       await _captureScreenshotViaFallback(
         session: session,
         targetPath: targetPath,
@@ -306,6 +341,9 @@ class RuntimeInteractionToolService {
       'status': 'completed',
       'format': normalizedFormat,
       'backend': backend,
+      'driverConnected': driverConnected,
+      'fallbackUsed': backend != 'external_adapter',
+      if (fallbackReason != null) 'fallbackReason': fallbackReason,
       'resource': <String, Object?>{
         'uri': uri,
         'mimeType': 'image/${normalizedFormat == 'jpg' ? 'jpeg' : normalizedFormat}',
@@ -442,6 +480,10 @@ class RuntimeInteractionToolService {
         (handle?.supportsHotOperations ?? false);
   }
 
+  bool _canFallbackScreenshot(SessionRecord session) {
+    return session.platform == 'ios' && _requireDeviceOrNull(session) != null;
+  }
+
   SessionRecord _requireLiveSession(String sessionId) {
     final session = sessionStore.requireById(sessionId);
     if (session.stale) {
@@ -480,7 +522,29 @@ class RuntimeInteractionToolService {
     return session;
   }
 
+  String? _requireDeviceOrNull(SessionRecord session) {
+    return session.deviceId;
+  }
+
   Future<RuntimeDriverHealth> _requireConnectedDriver(SessionRecord session) async {
+    if (!driverEnabled) {
+      throw FlutterHelmToolError(
+        code: 'RUNTIME_DRIVER_UNAVAILABLE',
+        category: 'runtime',
+        message: 'Runtime driver is disabled.',
+        retryable: false,
+        detailsResource: _healthResource(session.sessionId),
+      );
+    }
+    if (!driverConfigured) {
+      throw FlutterHelmToolError(
+        code: 'RUNTIME_DRIVER_UNAVAILABLE',
+        category: 'runtime',
+        message: 'Runtime driver is not configured.',
+        retryable: false,
+        detailsResource: _healthResource(session.sessionId),
+      );
+    }
     final status = await _driverAdapter.health();
     if (!status.connected) {
       throw FlutterHelmToolError(
