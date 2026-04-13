@@ -1744,6 +1744,12 @@ adapters:
           },
         });
         expect(initialize['serverInfo'], containsPair('name', 'flutterhelm'));
+        final experimental =
+            (initialize['capabilities'] as Map<Object?, Object?>)['experimental']
+                as Map<Object?, Object?>;
+        final httpPreview =
+            experimental['httpPreview'] as Map<Object?, Object?>;
+        expect(httpPreview['sessionExpiryMinutes'], 30);
         await client.notify('notifications/initialized');
 
         final tools = await client.request('tools/list');
@@ -1804,6 +1810,67 @@ adapters:
         expect(afterDelete.statusCode, HttpStatus.notFound);
       },
     );
+
+    test('normalizes HTTP preview failures and expires idle sessions', () async {
+      final sandbox = await Directory.systemTemp.createTemp('flutterhelm-http');
+      addTearDown(() => sandbox.delete(recursive: true));
+
+      final stateDir = Directory(p.join(sandbox.path, 'state'));
+      final client = await _HttpTestMcpClient.start(
+        repoRoot: Directory.current.path,
+        stateDir: stateDir.path,
+        allowRootFallback: true,
+        httpPreviewSessionExpiryMinutesOverride: 0.01,
+      );
+      addTearDown(client.close);
+
+      await client.request('initialize', <String, Object?>{
+        'protocolVersion': '2025-06-18',
+        'capabilities': const <String, Object?>{},
+        'clientInfo': <String, Object?>{
+          'name': 'http-test-client',
+          'version': '1.0.0',
+        },
+      });
+      await client.notify('notifications/initialized');
+
+      final invalidOrigin = await client.rawRequest(
+        'tools/list',
+        const <String, Object?>{},
+        headers: <String, String>{'Origin': 'https://example.com'},
+      );
+      expect(invalidOrigin.statusCode, HttpStatus.forbidden);
+      expect(
+        ((jsonDecode(invalidOrigin.body) as Map<String, Object?>)['error']
+                as Map<String, Object?>)['code'],
+        'HTTP_PREVIEW_INVALID_ORIGIN',
+      );
+
+      final invalidProtocol = await client.rawRequest(
+        'tools/list',
+        const <String, Object?>{},
+        includeProtocolVersion: false,
+      );
+      expect(invalidProtocol.statusCode, HttpStatus.badRequest);
+      expect(
+        ((jsonDecode(invalidProtocol.body) as Map<String, Object?>)['error']
+                as Map<String, Object?>)['code'],
+        'HTTP_PREVIEW_INVALID_PROTOCOL',
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+
+      final expired = await client.rawRequest(
+        'tools/list',
+        const <String, Object?>{},
+      );
+      expect(expired.statusCode, HttpStatus.notFound);
+      expect(
+        ((jsonDecode(expired.body) as Map<String, Object?>)['error']
+                as Map<String, Object?>)['code'],
+        'HTTP_PREVIEW_SESSION_EXPIRED',
+      );
+    });
   });
 }
 
@@ -2029,7 +2096,13 @@ class _HttpTestMcpClient {
     String? configPath,
     String? profile,
     bool allowRootFallback = false,
+    double? httpPreviewSessionExpiryMinutesOverride,
   }) async {
+    final environment = <String, String>{
+      if (httpPreviewSessionExpiryMinutesOverride != null)
+        'FLUTTERHELM_HTTP_PREVIEW_SESSION_EXPIRY_MINUTES_OVERRIDE':
+            httpPreviewSessionExpiryMinutesOverride.toString(),
+    };
     final process = await Process.start(
       Platform.resolvedExecutable,
       <String>[
@@ -2053,6 +2126,7 @@ class _HttpTestMcpClient {
         if (allowRootFallback) '--allow-root-fallback',
       ],
       workingDirectory: repoRoot,
+      environment: environment.isEmpty ? null : environment,
     );
 
     final endpointCompleter = Completer<Uri>();
@@ -2140,6 +2214,9 @@ class _HttpTestMcpClient {
     String method,
     Map<String, Object?> params, {
     String? id,
+    Map<String, String>? headers,
+    bool includeSessionId = true,
+    bool includeProtocolVersion = true,
     Duration timeout = const Duration(seconds: 10),
   }) {
     return _send(
@@ -2149,22 +2226,31 @@ class _HttpTestMcpClient {
         'method': method,
         'params': params,
       },
+      headers: headers,
+      includeSessionId: includeSessionId,
+      includeProtocolVersion: includeProtocolVersion,
       timeout: timeout,
     );
   }
 
   Future<_RawHttpResponse> _send(
     Map<String, Object?> payload, {
+    Map<String, String>? headers,
+    bool includeSessionId = true,
+    bool includeProtocolVersion = true,
     Duration timeout = const Duration(seconds: 10),
   }) async {
     final request = await httpClient.postUrl(endpoint);
     request.headers.contentType = ContentType.json;
-    if (_sessionId != null) {
+    if (includeSessionId && _sessionId != null) {
       request.headers.set('MCP-Session-Id', _sessionId!);
     }
-    if (_protocolVersion != null) {
+    if (includeProtocolVersion && _protocolVersion != null) {
       request.headers.set('MCP-Protocol-Version', _protocolVersion!);
     }
+    headers?.forEach((String key, String value) {
+      request.headers.set(key, value);
+    });
     request.write(jsonEncode(payload));
     final response = await request.close().timeout(timeout);
     final body = await utf8.decoder.bind(response).join();
@@ -2177,6 +2263,26 @@ class _HttpTestMcpClient {
           (_asMap(payload['params'])['protocolVersion'] as String?) ??
           '2025-06-18';
     }
+    return _RawHttpResponse(
+      statusCode: response.statusCode,
+      body: body,
+      headers: response.headers,
+    );
+  }
+
+  Future<_RawHttpResponse> getRaw({
+    Map<String, String>? headers,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final request = await httpClient.getUrl(endpoint);
+    headers?.forEach((String key, String value) {
+      request.headers.set(key, value);
+    });
+    if (_sessionId != null) {
+      request.headers.set('MCP-Session-Id', _sessionId!);
+    }
+    final response = await request.close().timeout(timeout);
+    final body = await utf8.decoder.bind(response).join();
     return _RawHttpResponse(
       statusCode: response.statusCode,
       body: body,

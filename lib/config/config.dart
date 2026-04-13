@@ -172,6 +172,7 @@ class AdaptersConfig {
     required this.runtimeDriverStartupTimeoutMs,
     required this.activeProviders,
     required this.providers,
+    required this.deprecations,
   });
 
   final String delegateType;
@@ -183,6 +184,7 @@ class AdaptersConfig {
   final int runtimeDriverStartupTimeoutMs;
   final Map<String, String> activeProviders;
   final Map<String, AdapterProviderConfig> providers;
+  final List<Map<String, Object?>> deprecations;
 
   static const Map<String, String> defaultActiveProviders = <String, String>{
     'delegate': 'builtin.delegate.workspace',
@@ -257,6 +259,7 @@ class AdaptersConfig {
     'providers': <String, Object?>{
       for (final entry in providers.entries) entry.key: entry.value.toJson(),
     },
+    if (deprecations.isNotEmpty) 'deprecations': deprecations,
     'delegate': <String, Object?>{'type': delegateType},
     'flutterCli': <String, Object?>{'executable': flutterExecutable},
     'dtd': <String, Object?>{'enabled': dtdEnabled},
@@ -346,6 +349,7 @@ class FlutterHelmConfig {
           ],
           runtimeDriverStartupTimeoutMs: 5000,
         ),
+        deprecations: const <Map<String, Object?>>[],
       ),
     );
   }
@@ -405,6 +409,7 @@ class FlutterHelmConfig {
     final runtimeDriverStartupTimeoutMs =
         _intValue(_mapValue(adapters['runtimeDriver'])['startupTimeoutMs']) ??
         5000;
+    final deprecations = _detectAdapterDeprecations(adapters);
     final defaultProviders = AdaptersConfig.defaultProviders(
       delegateType: delegateType,
       flutterExecutable: flutterExecutable,
@@ -462,6 +467,7 @@ class FlutterHelmConfig {
         runtimeDriverStartupTimeoutMs: runtimeDriverStartupTimeoutMs,
         activeProviders: activeProviders,
         providers: providers,
+        deprecations: deprecations,
       ),
       activeProfile: selectedProfile,
       availableProfiles: availableProfiles,
@@ -617,7 +623,7 @@ Map<String, String> _stringMap(Map<String, Object?> value) {
 Map<String, AdapterProviderConfig> _parseProviderConfigs(
   Map<String, Object?> rawProviders,
 ) {
-  final providers = <String, AdapterProviderConfig>{};
+    final providers = <String, AdapterProviderConfig>{};
   for (final entry in rawProviders.entries) {
     final provider = _mapValue(entry.value);
     final kind = _stringValue(provider['kind']) ?? 'stdio_json';
@@ -634,6 +640,58 @@ Map<String, AdapterProviderConfig> _parseProviderConfigs(
     );
   }
   return providers;
+}
+
+List<Map<String, Object?>> _detectAdapterDeprecations(
+  Map<String, Object?> adapters,
+) {
+  final deprecations = <Map<String, Object?>>[];
+  void add({
+    required String field,
+    required String replacement,
+    required String message,
+  }) {
+    deprecations.add(<String, Object?>{
+      'field': field,
+      'replacement': replacement,
+      'message': message,
+      'severity': 'warning',
+    });
+  }
+
+  if (adapters.containsKey('delegate')) {
+    add(
+      field: 'adapters.delegate',
+      replacement: 'adapters.active / adapters.providers',
+      message:
+          'Legacy delegate adapter settings are shimmed for now; prefer the registry shape.',
+    );
+  }
+  if (adapters.containsKey('flutterCli')) {
+    add(
+      field: 'adapters.flutterCli',
+      replacement: 'adapters.active / adapters.providers',
+      message:
+          'Legacy Flutter CLI adapter settings are shimmed for now; prefer the registry shape.',
+    );
+  }
+  if (adapters.containsKey('dtd')) {
+    add(
+      field: 'adapters.dtd',
+      replacement: 'adapters.active / adapters.providers',
+      message:
+          'Legacy DTD adapter settings are shimmed for now; prefer the registry shape.',
+    );
+  }
+  if (adapters.containsKey('runtimeDriver')) {
+    add(
+      field: 'adapters.runtimeDriver',
+      replacement: 'adapters.active / adapters.providers',
+      message:
+          'Legacy runtimeDriver adapter settings are shimmed for now; prefer the registry shape.',
+    );
+  }
+  return deprecations;
 }
 
 String? _stringValue(Object? value) {

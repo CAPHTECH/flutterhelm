@@ -109,6 +109,15 @@ adapters:
       expect(provider.command, 'npx');
       expect(provider.args, contains('--stdio'));
       expect(provider.options['enabled'], isTrue);
+      expect(config.adapters.deprecations, isNotEmpty);
+      expect(
+        config.adapters.deprecations.map((entry) => entry['field']),
+        containsAll(<String?>[
+          'adapters.delegate',
+          'adapters.flutterCli',
+          'adapters.runtimeDriver',
+        ]),
+      );
     });
 
     test('parses explicit adapter providers and active family selection', () {
@@ -139,6 +148,7 @@ adapters:
       expect(provider.command, 'dart');
       expect(provider.args, contains('tool/fake_stdio_adapter_provider.dart'));
       expect(provider.startupTimeoutMs, 9000);
+      expect(config.adapters.deprecations, isEmpty);
     });
 
     test('rejects unsupported config versions', () {

@@ -284,11 +284,12 @@ class HardeningToolService {
       ),
     };
 
-    final adapters = await adapterRegistry.activeAdaptersSummary();
+    final adapters = await adapterRegistry.currentResource();
 
     return <String, Object?>{
       'profile': resolvedConfig.activeProfile,
       'availableProfiles': resolvedConfig.availableProfiles,
+      'deprecations': resolvedConfig.adapters.deprecations,
       'workspaceRoot': activeRoot,
       'environment': <String, Object?>{
         'os': Platform.operatingSystem,

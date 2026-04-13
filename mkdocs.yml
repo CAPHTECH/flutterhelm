@@ -14,6 +14,7 @@ nav:
   - Roadmap: 07-roadmap.md
   - Open Questions: 08-open-questions.md
   - Implementation Plan: 09-implementation-plan.md
+  - Migration Notes: 10-migration-notes.md
   - ADRs:
       - ADR-001 Positioning: adrs/ADR-001-positioning.md
       - ADR-002 Transport and Roots: adrs/ADR-002-transport-roots.md

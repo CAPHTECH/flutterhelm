@@ -34,6 +34,7 @@ mise exec -- pnpm -C harness bridge
 mise exec -- pnpm -C harness interaction
 mise exec -- pnpm -C harness hardening
 mise exec -- pnpm -C harness ecosystem
+mise exec -- pnpm -C harness beta
 mise exec -- pnpm -C harness qa
 mise exec -- pnpm -C harness run -- --tag regression
 mise exec -- pnpm -C harness run -- --tag runtime
@@ -63,6 +64,7 @@ mise exec -- pnpm -C harness report
 - `interaction`: iOS simulator で opt-in runtime driver を有効にし、screenshot / semantic interaction / hot reload-restart / attached-session guard を確認
 - `hardening`: profile overlay / compatibility preflight / artifact pin lifecycle / busy rejection を確認
 - `ecosystem`: adapter registry visibility / custom `stdio_json` provider / localhost-only HTTP preview session flow を確認
+- `beta`: `smoke`, `contracts`, `hardening`, `ecosystem`, `runtime`, `profiling`, `bridge`, `interaction` をまとめて回す release-facing aggregate
 - `edge`: 実務でよく聞かれる設計質問
 - `adversarial`: 誤った前提に対する防御的回答
 

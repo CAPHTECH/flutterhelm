@@ -1828,26 +1828,53 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "README.md",
     [
+      "Local beta-ready implementation",
+      "0.1.0-phase6-beta",
       "`compatibility_check`",
       "`artifact_pin`",
       "`artifact_unpin`",
       "`artifact_pin_list`",
       "`config://compatibility/current`",
       "`config://artifacts/pins`",
+      "docs/10-migration-notes.md",
       "`--profile`",
       "`FLUTTERHELM_PROFILE`",
+      "pnpm -C harness beta",
     ],
     "README hardening core",
   );
+  const harnessPackage = JSON.parse(await readRepoText(repoRoot, "harness/package.json")) as {
+    scripts?: Record<string, string>;
+  };
+  const betaScript = harnessPackage.scripts?.beta;
+  if (!betaScript) {
+    throw new Error("harness/package.json is missing beta script");
+  }
+  for (const expected of [
+    "smoke",
+    "contracts",
+    "hardening",
+    "ecosystem",
+    "runtime",
+    "profiling",
+    "bridge",
+    "interaction",
+  ]) {
+    if (!betaScript.includes(expected)) {
+      throw new Error(`harness beta script is missing ${expected}: ${betaScript}`);
+    }
+  }
   await checkRequiredStrings(
     repoRoot,
     "docs/07-roadmap.md",
     [
+      "Phase 6 beta-ready",
+      "Sprint 10-12 beta release discipline",
       "concurrency handling",
       "pinned artifacts",
       "config profiles",
       "compatibility matrix",
-      "Sprint 8",
+      "0.1.0-phase6-beta",
     ],
     "Roadmap Phase 6",
   );
@@ -1856,14 +1883,31 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
     "docs/09-implementation-plan.md",
     [
       "### Sprint 8",
+      "### Sprint 10",
+      "### Sprint 11",
+      "### Sprint 12",
       "session/workspace fail-fast lock",
       "`artifact_pin`",
       "`artifact_unpin`",
       "`artifact_pin_list`",
       "`compatibility_check`",
       "config profile overlay",
+      "migration notes / release discipline",
+      "`beta` harness aggregate command",
     ],
     "Implementation plan Sprint 8",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/10-migration-notes.md",
+    [
+      "beta-ready",
+      "0.1.0-phase6-beta",
+      "migration notes",
+      "pnpm -C harness beta",
+      "deprecation",
+    ],
+    "Migration notes",
   );
 }
 
@@ -2076,6 +2120,8 @@ async function checkPhase6EcosystemDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "README.md",
     [
+      "beta-ready",
+      "0.1.0-phase6-beta",
       "`adapter_list`",
       "`config://adapters/current`",
       "`--transport http`",
@@ -2097,6 +2143,8 @@ async function checkPhase6EcosystemDocs(repoRoot: string): Promise<void> {
       "`adapter_list`",
       "`experimental.httpPreview.mode = preview`",
       "`experimental.adapterRegistry.customProviderKinds = [\"stdio_json\"]`",
+      "beta release metadata",
+      "`serverInfo.contractVersion = 0.1.0-phase6-beta`",
     ],
     "MCP contract ecosystem preview",
   );
@@ -2104,7 +2152,8 @@ async function checkPhase6EcosystemDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "docs/07-roadmap.md",
     [
-      "Sprint 9",
+      "Sprint 10-12 beta release discipline",
+      "0.1.0-phase6-beta",
       "Streamable HTTP preview",
       "extension / plugin point for custom adapters",
       "adapter registry / custom `stdio_json` provider / `adapter_list` / `config://adapters/current`",
@@ -2116,12 +2165,16 @@ async function checkPhase6EcosystemDocs(repoRoot: string): Promise<void> {
     "docs/09-implementation-plan.md",
     [
       "### Sprint 9",
+      "### Sprint 10",
+      "### Sprint 11",
+      "### Sprint 12",
       "transport-agnostic core",
       "`config://adapters/current`",
       "`adapter_list`",
       "`stdio_json`",
       "`--transport http`",
       "localhost-only Streamable HTTP preview",
+      "`beta` harness aggregate command",
     ],
     "Implementation plan Sprint 9",
   );
@@ -2129,9 +2182,10 @@ async function checkPhase6EcosystemDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "docs/adrs/ADR-002-transport-roots.md",
     [
-      "Sprint 9 update",
+      "Sprint 12 update",
       "primary transport は引き続き `stdio`",
       "HTTP preview では Roots transport を扱わず",
+      "0.1.0-phase6-beta",
     ],
     "ADR-002 Sprint 9 update",
   );

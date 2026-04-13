@@ -15,14 +15,15 @@ FlutterHelm は、これらを置き換えるものではありません。
 
 ## ステータス
 
-- 状態: **Local alpha implementation with Phase 6 hardening and ecosystem preview available**
-- 実装: **Phase 5 optional runtime interaction + Sprint 8 hardening core + Sprint 9 adapter registry / HTTP preview preview are available in this repository**
+- 状態: **Local beta-ready implementation with Phase 6 hardening and ecosystem preview available**
+- 実装: **Phase 5 optional runtime interaction + Sprint 8 hardening core + Sprint 9 adapter registry / HTTP preview + Sprint 10-12 beta release discipline are available in this repository**
+- public contract version: `0.1.0-phase6-beta`
 - 実装前提: MCP client は最低でも **Tools** と **Resources** を扱えること
 - 推奨: **Roots** を扱えること
 - 初期 transport: **stdio-first**
 - 主要スコープ: Flutter ローカル開発、実行中アプリの観測、テスト、profiling、native handoff
 
-現在コードで実装されているのは Phase 5 のローカル反復面に、Sprint 8 hardening core と Sprint 9 ecosystem preview を足した面です。
+現在コードで実装されているのは Phase 5 のローカル反復面に、Sprint 8 hardening core、Sprint 9 ecosystem preview、Sprint 10-12 の beta release discipline を足した面です。
 
 - `workspace_discover`
 - `analyze_project`
@@ -101,6 +102,7 @@ Sprint 9 では adapter registry を導入し、`config://adapters/current` と 
 - [Roadmap](docs/07-roadmap.md)
 - [Open Questions](docs/08-open-questions.md)
 - [Implementation Plan](docs/09-implementation-plan.md)
+- [Migration Notes](docs/10-migration-notes.md)
 - ADR
   - [ADR-001: Positioning](docs/adrs/ADR-001-positioning.md)
   - [ADR-002: Transport and Roots](docs/adrs/ADR-002-transport-roots.md)
@@ -164,6 +166,7 @@ mise exec -- dart pub get
 mise exec -- dart analyze
 mise exec -- dart test
 mise exec -- dart run bin/flutterhelm.dart serve
+mise exec -- pnpm -C harness beta
 ```
 
 config/state の既定配置は `~/.config/flutterhelm/` です。
@@ -221,9 +224,9 @@ profiles:
 ```
 
 legacy adapter fields も current implementation では読み込めますが、Sprint 9 以降の推奨 shape は `adapters.active` / `adapters.providers` です。
-custom provider kind は `stdio_json` です。
+custom provider kind は `stdio_json` です。deprecation と active provider 状態は `adapter_list` / `config://adapters/current` / `compatibility_check` で確認できます。
 
-hardening / ecosystem 系の read-only resource として、`config://compatibility/current`、`config://artifacts/pins`、`config://adapters/current` も公開されます。
+hardening / ecosystem 系の read-only resource として、`config://compatibility/current`、`config://artifacts/pins`、`config://adapters/current` も公開されます。release / migration notes は `docs/10-migration-notes.md` にまとまっています。
 
 repo-local の deterministic fixture は `fixtures/sample_app/` にあります。
 
@@ -248,10 +251,11 @@ mise exec -- pnpm -C harness bridge
 mise exec -- pnpm -C harness interaction
 mise exec -- pnpm -C harness hardening
 mise exec -- pnpm -C harness ecosystem
+mise exec -- pnpm -C harness beta
 mise exec -- pnpm -C harness qa
 ```
 
 `bootstrap` は `harness/.venv-docs` に MkDocs を導入するため、global な `mkdocs` install は不要です。  
 `smoke` / `contracts` / `runtime` を回す前に `mise trust && mise install && mise exec -- dart pub get` を済ませてください。  
 report は `harness/reports/`、QA trace は `harness/traces/` に残ります。
-`contracts` は package approval replay / coverage readback / platform bridge exposure / Phase 5 capability metadata まで、`runtime` は macOS + Xcode simulator 前提で overflow 診断と integration test まで見ます。`profiling` は同じく local simulator 上で VM service-backed profiling capture と session health を見ます。`bridge` は iOS native handoff bundle と synthetic Android handoff contract を見ます。`interaction` は opt-in runtime driver を有効にして screenshot / semantic tap-text-scroll / hot reload-restart / attached-session guard を見ます。`hardening` は profile overlay, compatibility preflight, artifact pin lifecycle, busy rejection を見ます。`ecosystem` は adapter registry visibility と localhost-only HTTP preview session flow を見ます。
+`contracts` は package approval replay / coverage readback / platform bridge exposure / Phase 5 capability metadata まで、`runtime` は macOS + Xcode simulator 前提で overflow 診断と integration test まで見ます。`profiling` は同じく local simulator 上で VM service-backed profiling capture と session health を見ます。`bridge` は iOS native handoff bundle と synthetic Android handoff contract を見ます。`interaction` は opt-in runtime driver を有効にして screenshot / semantic tap-text-scroll / hot reload-restart / attached-session guard を見ます。`hardening` は profile overlay, compatibility preflight, artifact pin lifecycle, busy rejection を見ます。`ecosystem` は adapter registry visibility と localhost-only HTTP preview session flow を見ます。`beta` は上記の release-facing checks をまとめて連続実行する集約コマンドです。

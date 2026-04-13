@@ -17,7 +17,8 @@ FlutterHelm は最初から全部を載せるべきではありません。
 
 ## 現在地点
 
-この repository では Phase 5 の optional runtime interaction checkpoint に加えて、Phase 6 の Sprint 8 hardening core と Sprint 9 ecosystem preview まで実装済みです。
+この repository では Phase 5 の optional runtime interaction checkpoint に加えて、Phase 6 beta-ready まで実装済みです。  
+具体的には Sprint 8 hardening core、Sprint 9 ecosystem preview、Sprint 10-12 beta release discipline を含みます。
 
 - workspace/session/launcher/runtime_readonly/tests が local で動く
 - repo-local `fixtures/sample_app` で deterministic validation ができる
@@ -29,7 +30,9 @@ FlutterHelm は最初から全部を載せるべきではありません。
 - fail-fast concurrency handling / artifact pinning / config profile overlay / compatibility preflight が local で動く
 - adapter registry / custom `stdio_json` provider / `adapter_list` / `config://adapters/current` が local で動く
 - localhost-only Streamable HTTP preview / fallback-only root flow / per-session `MCP-Session-Id` が local で動く
-- 残りは broader ecosystem hardening / migration notes / transport preview refinement
+- 0.1.0-phase6-beta の contract version と migration notes が local で確認できる
+- `beta` harness aggregate で release-facing checks を一括実行できる
+- deprecations は `adapter_list` / `config://adapters/current` / `compatibility_check` で確認できる
 
 ## Phase 0 — Foundation
 
@@ -190,6 +193,7 @@ FlutterHelm は最初から全部を載せるべきではありません。
 
 - `concurrency handling`, `pinned artifacts`, `config profiles`, `compatibility matrix` は Sprint 8 として実装済み
 - `Streamable HTTP preview` と `extension / plugin point for custom adapters` は Sprint 9 として local preview 実装済み
+- `HTTP preview hardening`, `adapter lifecycle hardening`, `migration notes / beta discipline` は Sprint 10-12 として beta-ready 実装済み
 
 ### Exit criteria
 

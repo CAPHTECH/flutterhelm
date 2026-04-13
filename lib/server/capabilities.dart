@@ -44,6 +44,7 @@ Map<String, Object?> buildServerCapabilities({
         'rootsSupport': 'unsupported',
         'sse': false,
         'resumability': false,
+        'sessionExpiryMinutes': 30,
         'activeTransport': transportMode,
       },
       'adapterRegistry': const <String, Object?>{

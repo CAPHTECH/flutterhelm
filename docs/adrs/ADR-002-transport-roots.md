@@ -45,3 +45,12 @@ Sprint 9 で localhost-only の Streamable HTTP preview を追加したが、こ
 - HTTP preview 上の write tool は fallback semantics に従い、`--allow-root-fallback` と explicit root selection を要求する
 
 したがって、`stdio-first, roots-aware` が基本であり、HTTP preview は local experimentation のための補助 transport に留める。
+
+## Sprint 12 update
+
+Sprint 12 で beta-ready release discipline を追加したが、transport decision は変えていない。
+
+- current contract version は `0.1.0-phase6-beta`
+- HTTP preview は引き続き localhost-only preview
+- roots-aware parity は stdio transport 側に残す
+- migration notes と deprecation surface は release discipline 側で扱う

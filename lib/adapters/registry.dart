@@ -5,6 +5,13 @@ import 'dart:io';
 import 'package:flutterhelm/config/config.dart';
 import 'package:flutterhelm/utils/process_runner.dart';
 
+const Duration stdioJsonProviderInvokeTimeout = Duration(seconds: 30);
+const List<Duration> stdioJsonProviderBackoffSchedule = <Duration>[
+  Duration(seconds: 1),
+  Duration(seconds: 5),
+  Duration(seconds: 30),
+];
+
 class RuntimeDriverHealth {
   const RuntimeDriverHealth({
     required this.connected,
@@ -59,6 +66,38 @@ abstract class RuntimeDriverAdapter {
   });
 }
 
+enum _ProviderLifecycleState { starting, healthy, degraded, backoff }
+
+class _ProviderLifecycleSnapshot {
+  const _ProviderLifecycleSnapshot({
+    required this.state,
+    required this.healthy,
+    required this.reasons,
+    required this.failureCount,
+    this.backoffUntil,
+    this.providerInfo,
+  });
+
+  final _ProviderLifecycleState state;
+  final bool healthy;
+  final List<String> reasons;
+  final int failureCount;
+  final DateTime? backoffUntil;
+  final Map<String, Object?>? providerInfo;
+
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'state': state.name,
+      'healthy': healthy,
+      'reasons': reasons,
+      'reason': reasons.isEmpty ? null : reasons.first,
+      'failureCount': failureCount,
+      if (backoffUntil != null) 'backoffUntil': backoffUntil!.toUtc().toIso8601String(),
+      if (providerInfo != null) 'providerInfo': providerInfo,
+    };
+  }
+}
+
 class AdapterFamilyStatus {
   const AdapterFamilyStatus({
     required this.family,
@@ -67,7 +106,11 @@ class AdapterFamilyStatus {
     required this.builtin,
     required this.healthy,
     required this.operations,
+    required this.state,
+    required this.reasons,
+    required this.failureCount,
     this.reason,
+    this.backoffUntil,
     this.providerInfo,
   });
 
@@ -77,7 +120,11 @@ class AdapterFamilyStatus {
   final bool builtin;
   final bool healthy;
   final List<String> operations;
+  final String state;
+  final List<String> reasons;
+  final int failureCount;
   final String? reason;
+  final DateTime? backoffUntil;
   final Map<String, Object?>? providerInfo;
 
   Map<String, Object?> toJson() {
@@ -88,7 +135,11 @@ class AdapterFamilyStatus {
       'builtin': builtin,
       'healthy': healthy,
       'operations': operations,
+      'state': state,
+      'reasons': reasons,
       if (reason != null) 'reason': reason,
+      'failureCount': failureCount,
+      if (backoffUntil != null) 'backoffUntil': backoffUntil!.toUtc().toIso8601String(),
       if (providerInfo != null) 'providerInfo': providerInfo,
     };
   }
@@ -168,6 +219,10 @@ class AdapterRegistry {
     for (final family in supportedFamilies) {
       families.add((await familyStatus(family)).toJson());
     }
+    final providers = <String, Object?>{
+      for (final entry in config.adapters.providers.entries)
+        entry.key: await _providerStatus(entry.value),
+    };
     return <String, Object?>{
       'families': families,
       'active': config.adapters.activeProviders,
@@ -183,6 +238,8 @@ class AdapterRegistry {
               'startupTimeoutMs': entry.value.startupTimeoutMs,
           },
       },
+      'providerStates': providers,
+      'deprecations': config.adapters.deprecations,
     };
   }
 
@@ -203,6 +260,9 @@ class AdapterRegistry {
         builtin: false,
         healthy: false,
         operations: const <String>[],
+        state: 'degraded',
+        reasons: <String>['Unsupported adapter family: $family'],
+        failureCount: 0,
         reason: 'Unsupported adapter family: $family',
       );
     }
@@ -216,6 +276,9 @@ class AdapterRegistry {
         builtin: false,
         healthy: false,
         operations: const <String>[],
+        state: 'degraded',
+        reasons: const <String>['No active provider configured for the family.'],
+        failureCount: 0,
         reason: 'No active provider configured for $family.',
       );
     }
@@ -229,6 +292,9 @@ class AdapterRegistry {
         builtin: false,
         healthy: false,
         operations: const <String>[],
+        state: 'degraded',
+        reasons: <String>['Configured provider $providerId was not found.'],
+        failureCount: 0,
         reason: 'Configured provider $providerId was not found.',
       );
     }
@@ -240,39 +306,44 @@ class AdapterRegistry {
         builtin: provider.builtin,
         healthy: false,
         operations: const <String>[],
+        state: 'degraded',
+        reasons: <String>['Provider $providerId does not support family $family.'],
+        failureCount: 0,
         reason: 'Provider $providerId does not support family $family.',
       );
     }
 
     if (provider.kind == 'stdio_json') {
-      try {
-        final health = await _providerClient(provider).health();
-        final familyHealth = _coerceMap(
-          _coerceMap(health['families'])[family],
-        );
-        final operations = _coerceStringList(familyHealth['operations']);
-        final healthy = familyHealth['healthy'] as bool? ?? false;
-        return AdapterFamilyStatus(
-          family: family,
-          activeProviderId: providerId,
-          kind: provider.kind,
-          builtin: provider.builtin,
-          healthy: healthy,
-          operations: operations,
-          reason: familyHealth['reason'] as String?,
-          providerInfo: _coerceMap(health['providerInfo']),
-        );
-      } on Object catch (error) {
-        return AdapterFamilyStatus(
-          family: family,
-          activeProviderId: providerId,
-          kind: provider.kind,
-          builtin: provider.builtin,
-          healthy: false,
-          operations: const <String>[],
-          reason: error.toString(),
-        );
-      }
+      final health = await _providerClient(provider).health();
+      final familyHealth = _coerceMap(_coerceMap(health['families'])[family]);
+      final operations = _coerceStringList(familyHealth['operations']);
+      final healthy = health['state'] == 'healthy' &&
+          (familyHealth['healthy'] as bool? ?? false);
+      final reasons = <String>[
+        ..._coerceStringList(health['reasons']),
+        ..._coerceStringList(familyHealth['reasons']),
+      ];
+      final reason = familyHealth['reason'] as String? ??
+          health['reason'] as String? ??
+          (reasons.isNotEmpty
+              ? reasons.first
+              : (healthy ? null : 'Provider $providerId is not healthy.'));
+      return AdapterFamilyStatus(
+        family: family,
+        activeProviderId: providerId,
+        kind: provider.kind,
+        builtin: provider.builtin,
+        healthy: healthy,
+        operations: operations,
+        state: _stringValue(health['state']) ?? 'degraded',
+        reasons: reasons.isEmpty && reason != null
+            ? <String>[reason]
+            : reasons,
+        failureCount: _intValue(health['failureCount']) ?? 0,
+        reason: reason,
+        backoffUntil: _dateTimeValue(health['backoffUntil']),
+        providerInfo: _coerceMap(health['providerInfo']),
+      );
     }
 
     if (family == 'runtimeDriver') {
@@ -285,7 +356,14 @@ class AdapterRegistry {
         builtin: provider.builtin,
         healthy: health.connected,
         operations: health.supportedActions,
-        reason: health.error,
+        state: health.connected ? 'healthy' : 'degraded',
+        reasons: <String>[
+          if (health.error != null) health.error!,
+          if (!health.connected && health.error == null)
+            'Runtime driver is not healthy.',
+        ],
+        failureCount: 0,
+        reason: health.error ?? (health.connected ? null : 'Runtime driver is not healthy.'),
         providerInfo: <String, Object?>{
           if (health.driverName != null) 'name': health.driverName,
           if (health.driverVersion != null) 'version': health.driverVersion,
@@ -303,6 +381,9 @@ class AdapterRegistry {
       builtin: provider.builtin,
       healthy: true,
       operations: _builtinOperations[family] ?? const <String>[],
+      state: 'healthy',
+      reasons: const <String>[],
+      failureCount: 0,
     );
   }
 
@@ -320,6 +401,44 @@ class AdapterRegistry {
         ),
       ),
     );
+  }
+
+  Future<Map<String, Object?>> _providerStatus(AdapterProviderConfig provider) async {
+    if (provider.kind == 'stdio_json') {
+      return _providerClient(provider).health();
+    }
+
+    if (provider.id == 'builtin.runtime_driver.external_process') {
+      final enabled = provider.options['enabled'] as bool? ?? false;
+      final reason = enabled
+          ? null
+          : 'Runtime driver is disabled in the current config.';
+      return <String, Object?>{
+        'state': enabled ? 'healthy' : 'degraded',
+        'healthy': enabled,
+        'reasons': <String>[if (reason != null) reason],
+        'reason': reason,
+        'failureCount': 0,
+        'providerInfo': <String, Object?>{
+          'enabled': enabled,
+          if (provider.command != null) 'command': provider.command,
+          if (provider.args.isNotEmpty) 'args': provider.args,
+          if (provider.startupTimeoutMs > 0)
+            'startupTimeoutMs': provider.startupTimeoutMs,
+        },
+      };
+    }
+
+    return <String, Object?>{
+      'state': 'healthy',
+      'healthy': true,
+      'reasons': const <String>[],
+      'failureCount': 0,
+      'providerInfo': <String, Object?>{
+        'kind': provider.kind,
+        'builtin': provider.builtin,
+      },
+    };
   }
 }
 
@@ -431,15 +550,20 @@ class _StdioJsonRuntimeDriverAdapter implements RuntimeDriverAdapter {
     final families = _coerceMap(payload['families']);
     final family = _coerceMap(families['runtimeDriver']);
     final providerInfo = _coerceMap(payload['providerInfo']);
+    final state = payload['state'] as String?;
+    final healthy = (payload['healthy'] as bool? ?? false) &&
+        (family['healthy'] as bool? ?? false);
     return RuntimeDriverHealth(
-      connected: family['healthy'] as bool? ?? false,
+      connected: healthy || state == 'healthy',
       driverName: providerInfo['name'] as String?,
       driverVersion: providerInfo['version'] as String?,
       supportedPlatforms: _coerceStringList(family['supportedPlatforms']),
       supportedActions: _coerceStringList(family['operations']),
       supportedLocatorFields: _coerceStringList(family['supportedLocatorFields']),
       screenshotFormats: _coerceStringList(family['screenshotFormats']),
-      error: family['reason'] as String?,
+      error: family['reason'] as String? ??
+          payload['reason'] as String? ??
+          _firstReason(payload['reasons']),
     );
   }
 
@@ -712,7 +836,7 @@ class _BuiltinMcpRuntimeDriverAdapter implements RuntimeDriverAdapter {
     final result = await connection.request('tools/call', <String, Object?>{
       'name': name,
       'arguments': arguments,
-    });
+    }, timeoutOverride: startupTimeout);
     return _decodeToolPayload(result);
   }
 
@@ -745,20 +869,13 @@ class _StdioJsonProviderClient {
   final List<String> args;
   final Duration startupTimeout;
   _JsonRpcConnection? _connection;
-  Map<String, Object?>? _healthCache;
+  _ProviderLifecycleState _state = _ProviderLifecycleState.starting;
+  int _failureCount = 0;
+  DateTime? _backoffUntil;
+  String? _lastError;
+  Map<String, Object?>? _providerInfo;
 
-  Future<Map<String, Object?>> health() async {
-    if (_healthCache != null) {
-      return _healthCache!;
-    }
-    final connection = await _ensureConnection();
-    final payload = await connection.request(
-      'provider/health',
-      const <String, Object?>{},
-    );
-    _healthCache = payload;
-    return payload;
-  }
+  Future<Map<String, Object?>> health() async => _refreshHealth();
 
   Future<Map<String, Object?>> invoke({
     required String family,
@@ -766,14 +883,22 @@ class _StdioJsonProviderClient {
     required Map<String, Object?> input,
   }) async {
     final connection = await _ensureConnection();
-    return connection.request(
-      'provider/invoke',
-      <String, Object?>{
-        'family': family,
-        'operation': operation,
-        'input': input,
-      },
-    );
+    try {
+      final result = await connection.request(
+        'provider/invoke',
+        <String, Object?>{
+          'family': family,
+          'operation': operation,
+          'input': input,
+        },
+        timeoutOverride: stdioJsonProviderInvokeTimeout,
+      );
+      _recordHealthy();
+      return result;
+    } on Object catch (error) {
+      _recordFailure(error);
+      rethrow;
+    }
   }
 
   Future<_JsonRpcConnection> _ensureConnection() async {
@@ -781,40 +906,248 @@ class _StdioJsonProviderClient {
     if (existing != null && existing.connected) {
       return existing;
     }
+    return _startConnection();
+  }
+
+  Future<Map<String, Object?>> _refreshHealth() async {
+    final blocked = _blockedRetrySnapshot();
+    if (blocked != null) {
+      return _healthResponse(
+        snapshot: blocked,
+        families: <String, Object?>{
+          'runtimeDriver': <String, Object?>{
+            'healthy': false,
+            'operations': const <String>[],
+            'supportedPlatforms': const <String>[],
+            'supportedLocatorFields': const <String>[],
+            'screenshotFormats': const <String>[],
+            'reasons': blocked.reasons,
+            'reason': blocked.reasons.isNotEmpty ? blocked.reasons.first : null,
+            'state': blocked.state.name,
+          },
+        },
+      );
+    }
+
+    try {
+      final connection = await _ensureConnection();
+      final payload = await connection.request(
+        'provider/health',
+        const <String, Object?>{},
+        timeoutOverride: startupTimeout,
+      );
+      final familyPayload = _coerceMap(
+        _coerceMap(payload['families'])['runtimeDriver'],
+      );
+      final providerInfo = _coerceMap(payload['providerInfo']);
+      final healthy = familyPayload['healthy'] as bool? ?? false;
+      final reason = familyPayload['reason'] as String? ??
+          payload['reason'] as String?;
+      final reasons = <String>[
+        ..._coerceStringList(payload['reasons']),
+        ..._coerceStringList(familyPayload['reasons']),
+        if (reason != null) reason,
+      ];
+      final state = healthy
+          ? _ProviderLifecycleState.healthy
+          : _providerStateFromSnapshot(
+              payload['state'] as String?,
+              healthy: healthy,
+            );
+      _providerInfo = providerInfo;
+      if (healthy) {
+        _recordHealthy();
+      } else {
+        _state = _ProviderLifecycleState.degraded;
+        _lastError = reason;
+      }
+      final snapshot = _snapshot(
+        state: state,
+        healthy: healthy,
+        reasons: reasons.isEmpty && reason != null
+            ? <String>[reason]
+            : reasons,
+        backoffUntil: _backoffUntil,
+      );
+      return _healthResponse(
+        snapshot: snapshot,
+        families: payload['families'],
+        providerInfo: providerInfo,
+      );
+    } on Object catch (error) {
+      final snapshot = _recordFailureSnapshot(error);
+      return _healthResponse(
+        snapshot: snapshot,
+        families: <String, Object?>{
+          'runtimeDriver': <String, Object?>{
+            'healthy': false,
+            'operations': const <String>[],
+            'supportedPlatforms': const <String>[],
+            'supportedLocatorFields': const <String>[],
+            'screenshotFormats': const <String>[],
+            'reasons': snapshot.reasons,
+            'reason': snapshot.reasons.isNotEmpty
+                ? snapshot.reasons.first
+                : snapshot.state.name,
+            'state': snapshot.state.name,
+          },
+        },
+      );
+    }
+  }
+
+  Future<_JsonRpcConnection> _startConnection() async {
     if (command.isEmpty) {
       throw StateError('Provider $providerId is missing a command.');
     }
-    final process = await Process.start(command, args);
-    final connection = _JsonRpcConnection._(
-      process: process,
-      timeout: startupTimeout,
-    );
-    final initialize = await connection.request(
-      'initialize',
-      <String, Object?>{
-        'protocolVersion': '2025-06-18',
-        'clientInfo': <String, Object?>{
-          'name': 'flutterhelm-adapter-host',
-          'version': '0.1.0',
-        },
-      },
-    );
-    final protocolVersion = initialize['adapterProtocolVersion'] as String?;
-    if (protocolVersion != 'flutterhelm.adapter.v1') {
+    final blocked = _blockedRetrySnapshot();
+    if (blocked != null) {
       throw StateError(
-        'Provider $providerId returned unsupported adapterProtocolVersion: $protocolVersion',
+        'Provider $providerId is in backoff until ${blocked.backoffUntil?.toUtc().toIso8601String() ?? 'unknown'}: ${blocked.reasons.join('; ')}',
       );
     }
-    _connection = connection;
-    _healthCache = null;
-    return connection;
+    _state = _ProviderLifecycleState.starting;
+    try {
+      final process = await Process.start(command, args);
+      final connection = _JsonRpcConnection._(process: process);
+      final initialize = await connection.request(
+        'initialize',
+        <String, Object?>{
+          'protocolVersion': '2025-06-18',
+          'clientInfo': <String, Object?>{
+            'name': 'flutterhelm-adapter-host',
+            'version': '0.1.0',
+          },
+        },
+        timeoutOverride: startupTimeout,
+      );
+      final protocolVersion = initialize['adapterProtocolVersion'] as String?;
+      if (protocolVersion != 'flutterhelm.adapter.v1') {
+        throw StateError(
+          'Provider $providerId returned unsupported adapterProtocolVersion: $protocolVersion',
+        );
+      }
+      _connection = connection;
+      return connection;
+    } on Object catch (error) {
+      _recordFailure(error);
+      rethrow;
+    }
+  }
+
+  void _recordHealthy() {
+    _state = _ProviderLifecycleState.healthy;
+    _failureCount = 0;
+    _backoffUntil = null;
+    _lastError = null;
+  }
+
+  void _recordFailure(Object error) {
+    _connection = null;
+    _failureCount += 1;
+    _state = _ProviderLifecycleState.backoff;
+    _lastError = error.toString();
+    final delay = _backoffDelayForAttempt(_failureCount);
+    _backoffUntil = DateTime.now().toUtc().add(delay);
+  }
+
+  _ProviderLifecycleSnapshot _recordFailureSnapshot(Object error) {
+    _recordFailure(error);
+    return _snapshot();
+  }
+
+  _ProviderLifecycleSnapshot? _blockedRetrySnapshot() {
+    final backoffUntil = _backoffUntil;
+    if (_state != _ProviderLifecycleState.backoff ||
+        backoffUntil == null ||
+        !DateTime.now().toUtc().isBefore(backoffUntil)) {
+      return null;
+    }
+    return _snapshot(
+      state: _ProviderLifecycleState.backoff,
+      healthy: false,
+      reasons: <String>[
+        if (_lastError != null) _lastError!,
+        'Retry after ${backoffUntil.toUtc().toIso8601String()}',
+      ],
+      backoffUntil: backoffUntil,
+    );
+  }
+
+  _ProviderLifecycleSnapshot _snapshot({
+    _ProviderLifecycleState? state,
+    bool? healthy,
+    List<String>? reasons,
+    DateTime? backoffUntil,
+  }) {
+    final snapshot = _ProviderLifecycleSnapshot(
+      state: state ?? _state,
+      healthy: healthy ?? (_state == _ProviderLifecycleState.healthy),
+      reasons: reasons ??
+          <String>[
+            if (_lastError != null) _lastError!,
+          ],
+      failureCount: _failureCount,
+      backoffUntil: backoffUntil ?? _backoffUntil,
+      providerInfo: _providerInfo,
+    );
+    return snapshot;
+  }
+
+  Map<String, Object?> _healthResponse({
+    required _ProviderLifecycleSnapshot snapshot,
+    required Object? families,
+    Map<String, Object?>? providerInfo,
+  }) {
+    final familyMap = families == null
+        ? const <String, Object?>{}
+        : _coerceMap(families);
+    return <String, Object?>{
+      'state': snapshot.state.name,
+      'healthy': snapshot.healthy,
+      'reasons': snapshot.reasons,
+      'reason': snapshot.reasons.isEmpty ? null : snapshot.reasons.first,
+      'failureCount': snapshot.failureCount,
+      if (snapshot.backoffUntil != null)
+        'backoffUntil': snapshot.backoffUntil!.toUtc().toIso8601String(),
+      'families': familyMap,
+      'providerInfo': providerInfo ?? snapshot.providerInfo ?? const <String, Object?>{},
+    };
+  }
+
+  _ProviderLifecycleState _providerStateFromSnapshot(
+    String? state, {
+    required bool healthy,
+  }) {
+    return switch (state) {
+      'starting' => healthy
+          ? _ProviderLifecycleState.healthy
+          : _ProviderLifecycleState.starting,
+      'healthy' => healthy
+          ? _ProviderLifecycleState.healthy
+          : _ProviderLifecycleState.degraded,
+      'degraded' => _ProviderLifecycleState.degraded,
+      'backoff' => _ProviderLifecycleState.backoff,
+      _ => healthy
+          ? _ProviderLifecycleState.healthy
+          : _ProviderLifecycleState.degraded,
+    };
+  }
+
+  Duration _backoffDelayForAttempt(int attempt) {
+    if (attempt <= 1) {
+      return stdioJsonProviderBackoffSchedule[0];
+    }
+    if (attempt == 2) {
+      return stdioJsonProviderBackoffSchedule[1];
+    }
+    return stdioJsonProviderBackoffSchedule[2];
   }
 }
 
 class _JsonRpcConnection {
   _JsonRpcConnection._({
     required this.process,
-    required this.timeout,
   }) {
     process.stdout
         .transform(utf8.decoder)
@@ -839,7 +1172,6 @@ class _JsonRpcConnection {
   }
 
   final Process process;
-  final Duration timeout;
   final Map<String, Completer<Map<String, Object?>>> _pendingRequests =
       <String, Completer<Map<String, Object?>>>{};
   int _nextRequestId = 1;
@@ -850,7 +1182,7 @@ class _JsonRpcConnection {
   Future<Map<String, Object?>> request(
     String method,
     Map<String, Object?> params,
-  ) {
+    {Duration? timeoutOverride}) {
     final id = (_nextRequestId++).toString();
     final completer = Completer<Map<String, Object?>>();
     _pendingRequests[id] = completer;
@@ -862,7 +1194,7 @@ class _JsonRpcConnection {
         'params': params,
       }),
     );
-    return completer.future.timeout(timeout);
+    return completer.future.timeout(timeoutOverride ?? stdioJsonProviderInvokeTimeout);
   }
 
   void _handleStdoutLine(String line) {
@@ -945,10 +1277,12 @@ class _McpConnection {
           'version': '0.1.0',
         },
       },
+      timeoutOverride: startupTimeout,
     );
     final toolsList = await connection.request(
       'tools/list',
       <String, Object?>{},
+      timeoutOverride: startupTimeout,
     );
     final serverInfo =
         initialize['serverInfo'] as Map<Object?, Object?>? ??
@@ -968,7 +1302,7 @@ class _McpConnection {
   Future<Map<String, Object?>> request(
     String method,
     Map<String, Object?> params,
-  ) {
+    {Duration? timeoutOverride}) {
     final id = (_nextRequestId++).toString();
     final completer = Completer<Map<String, Object?>>();
     _pendingRequests[id] = completer;
@@ -980,7 +1314,7 @@ class _McpConnection {
         'params': params,
       }),
     );
-    return completer.future.timeout(startupTimeout);
+    return completer.future.timeout(timeoutOverride ?? startupTimeout);
   }
 
   void _handleStdoutLine(String line) {
@@ -1095,4 +1429,36 @@ List<Object?> _coerceList(Object? value) {
 
 List<String> _coerceStringList(Object? value) {
   return _coerceList(value).whereType<String>().toList();
+}
+
+String? _firstReason(Object? value) {
+  final reasons = _coerceStringList(value);
+  if (reasons.isNotEmpty) {
+    return reasons.first;
+  }
+  if (value is String && value.isNotEmpty) {
+    return value;
+  }
+  return null;
+}
+
+String? _stringValue(Object? value) {
+  if (value is String && value.isNotEmpty) {
+    return value;
+  }
+  return null;
+}
+
+int? _intValue(Object? value) {
+  if (value is int) {
+    return value;
+  }
+  return null;
+}
+
+DateTime? _dateTimeValue(Object? value) {
+  if (value is String && value.isNotEmpty) {
+    return DateTime.tryParse(value);
+  }
+  return null;
 }

@@ -28,7 +28,7 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 
 ### Current local alpha surface
 
-この repository の current implementation は Phase 5 に Sprint 8 hardening core と Sprint 9 ecosystem preview を足した状態です。
+この repository の current implementation は Phase 5 に Sprint 8 hardening core と Sprint 9 ecosystem preview、Sprint 10-12 の beta release discipline を足した状態です。
 
 - `workspace`, `session`, `launcher`, `runtime_readonly`, `tests` workflow を local で実装
 - package search / dependency mutation approval replay / integration tests / coverage readback を含む
@@ -38,6 +38,7 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 - hardening core を local で実装し、busy policy は `fail_fast`、artifact pinning と config profile overlay と compatibility preflight を含む
 - adapter registry を local で実装し、custom provider kind は `stdio_json`、legacy adapter config は shim で受理
 - transport は `stdio-first` で、localhost-only の Streamable HTTP preview を追加済み
+- current contract version は `0.1.0-phase6-beta`
 
 ## 3. Workflow Groups
 
@@ -175,6 +176,14 @@ current implementation は capability metadata に次を含みます。
 
 HTTP preview は request-response only です。`GET`/SSE/resume は扱わず、`MCP-Session-Id` header で session を維持します。
 stdio が primary transport であり、HTTP preview では Roots transport を扱わないため fallback semantics を前提にします。
+
+## 4.11 beta release metadata
+
+current implementation の beta release contract は次を公開します。
+
+- `serverInfo.contractVersion = 0.1.0-phase6-beta`
+- legacy adapter config は互換入力として受理しつつ、deprecated であることを public resource で可視化
+- deprecation / health / active selection は `adapter_list`, `config://adapters/current`, `compatibility_check` で確認可能
 
 ## 5. Sample Tool Schemas
 
@@ -582,6 +591,8 @@ current implementation の `capabilities.experimental.runtimeInteraction` は以
 
 - semantic versioning for server releases
 - contract version surfaced in `serverInfo`
+- current beta contract version is `0.1.0-phase6-beta`
+- deprecated config / tools should surface via public resources before removal
 - breaking tool/schema changes require minor/major protocol note
 - deprecated tools remain for at least one minor release when feasible
 

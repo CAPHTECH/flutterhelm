@@ -295,6 +295,24 @@ current implementation の HTTP preview は localhost-only / request-response on
 
 current implementation では retention は server startup 時の age-based sweep で、pinned artifact は対象から外します。capacity-based LRU は次の sprint に送ります。
 
+Phase 6 の Sprint 10 ではさらに以下を追加します。
+
+- HTTP session idle expiry / cleanup
+- preview transport failure normalization
+- HTTP lifecycle tests
+
+Phase 6 の Sprint 11 ではさらに以下を追加します。
+
+- adapter provider lifecycle / lazy restart policy
+- deprecation surface in adapter resources
+- provider health backoff visibility
+
+Phase 6 の Sprint 12 ではさらに以下を追加します。
+
+- `0.1.0-phase6-beta` contract version
+- migration notes / release discipline
+- `beta` harness aggregate command
+
 ## 5. First sprint plan
 
 ### Sprint 1
@@ -392,6 +410,24 @@ current implementation では retention は server startup 時の age-based swee
 - localhost-only Streamable HTTP preview
 - fallback-only root flow for HTTP preview
 
+### Sprint 10
+
+- HTTP session idle expiry / cleanup
+- preview transport failure normalization
+- HTTP lifecycle contract tests
+
+### Sprint 11
+
+- adapter provider lifecycle / lazy restart policy
+- deprecation surface in adapter resources
+- provider health backoff visibility
+
+### Sprint 12
+
+- `0.1.0-phase6-beta` contract version
+- migration notes / release discipline
+- `beta` harness aggregate command
+
 ## 6. Test strategy
 
 ## 6.1 Unit tests
@@ -457,7 +493,7 @@ current implementation では retention は server startup 時の age-based swee
 ## 9. Migration / compatibility approach
 
 - server exposes version and contract version
-- breaking changes require migration notes
+- breaking changes require migration notes and a visible deprecation surface
 - optional capabilities are discoverable
 - workflows unavailable on current platform are hidden or reported as disabled
 

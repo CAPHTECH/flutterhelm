@@ -79,16 +79,23 @@ extension on TransportMode {
   };
 }
 
+const Duration _httpPreviewSweepInterval = Duration(minutes: 5);
+const Duration _httpPreviewExpiredSessionRetention = Duration(hours: 1);
+const String _httpPreviewExpiryOverrideEnv =
+    'FLUTTERHELM_HTTP_PREVIEW_SESSION_EXPIRY_MINUTES_OVERRIDE';
+
 typedef ServerEmitter = void Function(Map<String, Object?> message);
 
 class ClientSessionContext {
   ClientSessionContext({
     required this.transportMode,
     this.httpSessionId,
-  });
+    DateTime? lastSeenAt,
+  }) : lastSeenAt = lastSeenAt ?? DateTime.now().toUtc();
 
   final TransportMode transportMode;
   final String? httpSessionId;
+  DateTime lastSeenAt;
 
   bool initializeReceived = false;
   bool clientInitialized = false;
@@ -100,6 +107,10 @@ class ClientSessionContext {
       <String, Completer<Object?>>{};
 
   bool get rootsTransportSupported => transportMode == TransportMode.stdio;
+
+  void touch(DateTime now) {
+    lastSeenAt = now;
+  }
 }
 
 class FlutterHelmServer {
@@ -159,6 +170,8 @@ class FlutterHelmServer {
   );
   final Map<String, ClientSessionContext> _httpSessions =
       <String, ClientSessionContext>{};
+  final Map<String, DateTime> _expiredHttpSessions =
+      <String, DateTime>{};
 
   static Future<FlutterHelmServer> create({
     required RuntimePaths runtimePaths,
@@ -335,8 +348,16 @@ class FlutterHelmServer {
     stderr.writeln(
       'HTTP preview listening on http://${server.address.host}:${server.port}$normalizedPath',
     );
-    await for (final request in server) {
-      unawaited(_handleHttpRequest(request, normalizedPath));
+    final sweepTimer = Timer.periodic(
+      _httpPreviewSweepInterval,
+      (_) => _sweepHttpSessions(),
+    );
+    try {
+      await for (final request in server) {
+        unawaited(_handleHttpRequest(request, normalizedPath));
+      }
+    } finally {
+      sweepTimer.cancel();
     }
   }
 
@@ -358,12 +379,15 @@ class FlutterHelmServer {
       return;
     }
 
+    final now = DateTime.now().toUtc();
+    _sweepHttpSessions(now: now);
+
     switch (request.method.toUpperCase()) {
       case 'POST':
-        await _handleHttpPost(request);
+        await _handleHttpPost(request, now);
         return;
       case 'DELETE':
-        await _handleHttpDelete(request);
+        await _handleHttpDelete(request, now);
         return;
       case 'GET':
         request.response.statusCode = HttpStatus.methodNotAllowed;
@@ -378,7 +402,7 @@ class FlutterHelmServer {
     }
   }
 
-  Future<void> _handleHttpPost(HttpRequest request) async {
+  Future<void> _handleHttpPost(HttpRequest request, DateTime now) async {
     final body = await utf8.decoder.bind(request).join();
     late final Object? payload;
     try {
@@ -399,11 +423,30 @@ class FlutterHelmServer {
     if (sessionId != null && sessionId.isNotEmpty) {
       context = _httpSessions[sessionId];
       if (context == null) {
+        if (_expiredHttpSessions.containsKey(sessionId)) {
+          await _writeHttpError(
+            request,
+            statusCode: HttpStatus.notFound,
+            code: 'HTTP_PREVIEW_SESSION_EXPIRED',
+            message: 'HTTP preview session expired: $sessionId',
+          );
+          return;
+        }
         await _writeHttpError(
           request,
           statusCode: HttpStatus.notFound,
           code: 'HTTP_PREVIEW_SESSION_REQUIRED',
           message: 'Unknown HTTP preview session: $sessionId',
+        );
+        return;
+      }
+      if (_isHttpSessionExpired(context, now)) {
+        _expireHttpSession(sessionId, now);
+        await _writeHttpError(
+          request,
+          statusCode: HttpStatus.notFound,
+          code: 'HTTP_PREVIEW_SESSION_EXPIRED',
+          message: 'HTTP preview session expired: $sessionId',
         );
         return;
       }
@@ -414,12 +457,13 @@ class FlutterHelmServer {
         await _writeHttpError(
           request,
           statusCode: HttpStatus.badRequest,
-          code: 'HTTP_PREVIEW_SESSION_REQUIRED',
+          code: 'HTTP_PREVIEW_INVALID_PROTOCOL',
           message:
-              'Initialized HTTP preview requests require MCP-Protocol-Version.',
+              'Initialized HTTP preview requests require a supported MCP-Protocol-Version.',
         );
         return;
       }
+      context.touch(now);
     } else {
       if (!_payloadContainsMethod(payload, 'initialize')) {
         await _writeHttpError(
@@ -434,6 +478,7 @@ class FlutterHelmServer {
       context = ClientSessionContext(
         transportMode: TransportMode.http,
         httpSessionId: newSessionId,
+        lastSeenAt: now,
       );
       _httpSessions[newSessionId] = context;
       createdSession = true;
@@ -441,6 +486,7 @@ class FlutterHelmServer {
 
     final responses = <Map<String, Object?>>[];
     try {
+      context.touch(now);
       await _handleIncoming(
         payload,
         context,
@@ -474,7 +520,7 @@ class FlutterHelmServer {
     await request.response.close();
   }
 
-  Future<void> _handleHttpDelete(HttpRequest request) async {
+  Future<void> _handleHttpDelete(HttpRequest request, DateTime now) async {
     final sessionId = request.headers.value('MCP-Session-Id');
     if (sessionId == null || sessionId.isEmpty) {
       await _writeHttpError(
@@ -485,8 +531,18 @@ class FlutterHelmServer {
       );
       return;
     }
+    _sweepHttpSessions(now: now);
     final removed = _httpSessions.remove(sessionId);
     if (removed == null) {
+      if (_expiredHttpSessions.containsKey(sessionId)) {
+        await _writeHttpError(
+          request,
+          statusCode: HttpStatus.notFound,
+          code: 'HTTP_PREVIEW_SESSION_EXPIRED',
+          message: 'HTTP preview session expired: $sessionId',
+        );
+        return;
+      }
       await _writeHttpError(
         request,
         statusCode: HttpStatus.notFound,
@@ -497,6 +553,46 @@ class FlutterHelmServer {
     }
     request.response.statusCode = HttpStatus.noContent;
     await request.response.close();
+  }
+
+  Duration get _httpPreviewSessionExpiry {
+    final override = Platform.environment[_httpPreviewExpiryOverrideEnv];
+    final minutes = override == null ? 30.0 : double.tryParse(override);
+    final effectiveMinutes = minutes == null || minutes <= 0 ? 30.0 : minutes;
+    return Duration(
+      milliseconds: (effectiveMinutes * Duration.millisecondsPerMinute).round(),
+    );
+  }
+
+  void _sweepHttpSessions({DateTime? now}) {
+    final effectiveNow = now ?? DateTime.now().toUtc();
+    final expiry = _httpPreviewSessionExpiry;
+    final expiredIds = <String>[];
+    for (final entry in _httpSessions.entries) {
+      if (effectiveNow.difference(entry.value.lastSeenAt) >= expiry) {
+        expiredIds.add(entry.key);
+      }
+    }
+    for (final sessionId in expiredIds) {
+      final removed = _httpSessions.remove(sessionId);
+      if (removed != null) {
+        _expiredHttpSessions[sessionId] = effectiveNow;
+      }
+    }
+    _expiredHttpSessions.removeWhere(
+      (_, expiredAt) =>
+          effectiveNow.difference(expiredAt) >=
+          _httpPreviewExpiredSessionRetention,
+    );
+  }
+
+  bool _isHttpSessionExpired(ClientSessionContext context, DateTime now) {
+    return now.difference(context.lastSeenAt) >= _httpPreviewSessionExpiry;
+  }
+
+  void _expireHttpSession(String sessionId, DateTime now) {
+    _httpSessions.remove(sessionId);
+    _expiredHttpSessions[sessionId] = now;
   }
 
   Future<void> _writeHttpError(
@@ -928,6 +1024,7 @@ class FlutterHelmServer {
                 : 'Adapter family $family resolved.',
             structuredContent: <String, Object?>{
               'adapters': adapters,
+              'deprecations': config.adapters.deprecations,
               'resource': 'config://adapters/current',
             },
             resourceLinks: <Map<String, Object?>>[
