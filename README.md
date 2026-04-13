@@ -13,6 +13,12 @@ FlutterHelm は、**Flutter 開発向けの agent-safe な orchestration layer /
 FlutterHelm は、これらを置き換えるものではありません。  
 **既存の正規インターフェースを束ね、セッション管理・安全制御・artifact/resource 管理を追加する**ための設計です。
 
+## Start Here
+
+- 日常的な使い方と最短セットアップ: [User Guide](docs/11-user-guide.md)
+- 失敗モードと対処: [Troubleshooting](docs/12-troubleshooting.md)
+- stable / beta / preview の境界と移行: [Migration Notes](docs/10-migration-notes.md)
+
 ## ステータス
 
 - 状態: **Local stable-ready implementation with Phase 6 hardening complete**
@@ -93,6 +99,9 @@ Sprint 13-15 では support level taxonomy、artifact capacity retention、opera
 
 ## ドキュメント構成
 
+- [User Guide](docs/11-user-guide.md)
+- [Troubleshooting](docs/12-troubleshooting.md)
+- [Migration Notes](docs/10-migration-notes.md)
 - [設計根拠](docs/00-design-basis.md)
 - [プロダクト概要](docs/01-product-brief.md)
 - [PRD](docs/02-prd.md)
@@ -103,7 +112,6 @@ Sprint 13-15 では support level taxonomy、artifact capacity retention、opera
 - [Roadmap](docs/07-roadmap.md)
 - [Open Questions](docs/08-open-questions.md)
 - [Implementation Plan](docs/09-implementation-plan.md)
-- [Migration Notes](docs/10-migration-notes.md)
 - ADR
   - [ADR-001: Positioning](docs/adrs/ADR-001-positioning.md)
   - [ADR-002: Transport and Roots](docs/adrs/ADR-002-transport-roots.md)

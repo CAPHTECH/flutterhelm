@@ -1,20 +1,24 @@
-site_name: FlutterHelm Design Docs
-site_description: Design documents for FlutterHelm, an agent-safe orchestration layer for Flutter development
+site_name: FlutterHelm Docs
+site_description: User and design docs for FlutterHelm, an agent-safe orchestration layer for Flutter development
 theme:
   name: mkdocs
 nav:
-  - Overview: index.md
-  - Design Basis: 00-design-basis.md
-  - Product Brief: 01-product-brief.md
-  - PRD: 02-prd.md
-  - Architecture: 03-architecture.md
-  - MCP Contract: 04-mcp-contract.md
-  - Session and Resources: 05-session-and-resources.md
-  - Security and Safety: 06-security-and-safety.md
-  - Roadmap: 07-roadmap.md
-  - Open Questions: 08-open-questions.md
-  - Implementation Plan: 09-implementation-plan.md
-  - Migration Notes: 10-migration-notes.md
+  - Start Here:
+      - Overview: index.md
+      - User Guide: 11-user-guide.md
+      - Troubleshooting: 12-troubleshooting.md
+      - Migration Notes: 10-migration-notes.md
+  - Design:
+      - Design Basis: 00-design-basis.md
+      - Product Brief: 01-product-brief.md
+      - PRD: 02-prd.md
+      - Architecture: 03-architecture.md
+      - MCP Contract: 04-mcp-contract.md
+      - Session and Resources: 05-session-and-resources.md
+      - Security and Safety: 06-security-and-safety.md
+      - Roadmap: 07-roadmap.md
+      - Open Questions: 08-open-questions.md
+      - Implementation Plan: 09-implementation-plan.md
   - ADRs:
       - ADR-001 Positioning: adrs/ADR-001-positioning.md
       - ADR-002 Transport and Roots: adrs/ADR-002-transport-roots.md

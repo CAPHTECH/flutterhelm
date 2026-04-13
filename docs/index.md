@@ -1,6 +1,6 @@
 # FlutterHelm Documentation
 
-このドキュメント群は、**FlutterHelm** を「Flutter 開発向けの orchestration layer / MCP server」として設計するための仕様書です。
+このドキュメント群は、**FlutterHelm** の user docs と design docs をまとめたものです。
 
 ## 一言でいうと
 
@@ -14,7 +14,15 @@ FlutterHelm は、
 
 を前提に、**AI エージェントが Flutter 開発を安全かつ再現可能に操作するための安定した contract** を提供します。
 
-## 読み順
+## まず使い始めるなら
+
+1. [User Guide](11-user-guide.md)
+2. [Troubleshooting](12-troubleshooting.md)
+3. [Migration Notes](10-migration-notes.md)
+
+この順で読むと、`stable` / `beta` / `preview` の境界、最短セットアップ、日常運用の失敗モードを把握できます。
+
+## 設計を追うなら
 
 ### 1. 背景と意図を先に掴みたい場合
 
