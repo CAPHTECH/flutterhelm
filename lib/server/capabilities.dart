@@ -31,6 +31,12 @@ Map<String, Object?> buildServerCapabilities({
         'screenshotWorkflow': 'runtime_readonly',
         'hotOpsOwnershipPolicy': 'owned_only',
       },
+      'hardening': const <String, Object?>{
+        'busyPolicy': 'fail_fast',
+        'pinnedArtifacts': true,
+        'configProfiles': true,
+        'compatibilityResource': 'config://compatibility/current',
+      },
     },
   };
 }

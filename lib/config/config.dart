@@ -24,6 +24,7 @@ class RuntimePaths {
 
   static const String configEnvVar = 'FLUTTERHELM_CONFIG_PATH';
   static const String stateDirEnvVar = 'FLUTTERHELM_STATE_DIR';
+  static const String profileEnvVar = 'FLUTTERHELM_PROFILE';
 
   factory RuntimePaths.fromEnvironment({
     String? configPathOverride,
@@ -168,6 +169,8 @@ class FlutterHelmConfig {
     required this.retention,
     required this.safety,
     required this.adapters,
+    this.activeProfile,
+    this.availableProfiles = const <String>[],
   });
 
   final int version;
@@ -178,6 +181,8 @@ class FlutterHelmConfig {
   final RetentionConfig retention;
   final SafetyConfig safety;
   final AdaptersConfig adapters;
+  final String? activeProfile;
+  final List<String> availableProfiles;
 
   static const List<String> defaultWorkflows = <String>[
     'workspace',
@@ -221,9 +226,15 @@ class FlutterHelmConfig {
     );
   }
 
-  factory FlutterHelmConfig.fromYamlText(String yamlText) {
+  factory FlutterHelmConfig.fromYamlText(
+    String yamlText, {
+    String? selectedProfile,
+  }) {
     final document = loadYaml(yamlText);
     if (document == null) {
+      if (selectedProfile != null && selectedProfile.isNotEmpty) {
+        throw ConfigException('Unknown config profile: $selectedProfile');
+      }
       return FlutterHelmConfig.defaults();
     }
     if (document is! YamlMap) {
@@ -231,17 +242,24 @@ class FlutterHelmConfig {
     }
 
     final root = _toPlainMap(document);
+    final profiles = _mapOfMaps(root['profiles']);
+    final availableProfiles = profiles.keys.toList()..sort();
+    final resolvedRoot = _applyProfileOverlay(
+      root,
+      profiles: profiles,
+      selectedProfile: selectedProfile,
+    );
     final version = _intValue(root['version'], 'version') ?? 1;
     if (version != 1) {
       throw ConfigException('Unsupported config version: $version');
     }
 
-    final workspace = _mapValue(root['workspace']);
-    final defaults = _mapValue(root['defaults']);
-    final fallbacks = _mapValue(root['fallbacks']);
-    final retention = _mapValue(root['retention']);
-    final safety = _mapValue(root['safety']);
-    final adapters = _mapValue(root['adapters']);
+    final workspace = _mapValue(resolvedRoot['workspace']);
+    final defaults = _mapValue(resolvedRoot['defaults']);
+    final fallbacks = _mapValue(resolvedRoot['fallbacks']);
+    final retention = _mapValue(resolvedRoot['retention']);
+    final safety = _mapValue(resolvedRoot['safety']);
+    final adapters = _mapValue(resolvedRoot['adapters']);
 
     return FlutterHelmConfig(
       version: version,
@@ -253,7 +271,7 @@ class FlutterHelmConfig {
         mode: _stringValue(defaults['mode']) ?? 'debug',
       ),
       enabledWorkflows:
-          _stringList(root['enabledWorkflows']) ?? defaultWorkflows,
+          _stringList(resolvedRoot['enabledWorkflows']) ?? defaultWorkflows,
       fallbacks: FallbacksConfig(
         allowRootFallback: _boolValue(fallbacks['allowRootFallback']) ?? false,
       ),
@@ -296,6 +314,8 @@ class FlutterHelmConfig {
             _intValue(_mapValue(adapters['runtimeDriver'])['startupTimeoutMs']) ??
             5000,
       ),
+      activeProfile: selectedProfile,
+      availableProfiles: availableProfiles,
     );
   }
 
@@ -309,6 +329,8 @@ class FlutterHelmConfig {
       'retention': retention.toJson(),
       'safety': safety.toJson(),
       'adapters': adapters.toJson(),
+      'activeProfile': activeProfile,
+      'availableProfiles': availableProfiles,
     };
   }
 }
@@ -318,14 +340,20 @@ class ConfigRepository {
 
   final RuntimePaths runtimePaths;
 
-  Future<FlutterHelmConfig> load() async {
+  Future<FlutterHelmConfig> load({String? selectedProfile}) async {
     final file = File(runtimePaths.configPath);
     if (!await file.exists()) {
+      if (selectedProfile != null && selectedProfile.isNotEmpty) {
+        throw ConfigException('Unknown config profile: $selectedProfile');
+      }
       return FlutterHelmConfig.defaults();
     }
 
     final yamlText = await file.readAsString();
-    return FlutterHelmConfig.fromYamlText(yamlText);
+    return FlutterHelmConfig.fromYamlText(
+      yamlText,
+      selectedProfile: selectedProfile,
+    );
   }
 }
 
@@ -420,6 +448,15 @@ Map<String, Object?> _mapValue(Object? value) {
   return <String, Object?>{};
 }
 
+Map<String, Map<String, Object?>> _mapOfMaps(Object? value) {
+  final raw = _mapValue(value);
+  final mapped = <String, Map<String, Object?>>{};
+  for (final entry in raw.entries) {
+    mapped[entry.key] = _mapValue(entry.value);
+  }
+  return mapped;
+}
+
 String? _stringValue(Object? value) {
   if (value is String && value.isNotEmpty) {
     return value;
@@ -458,4 +495,61 @@ List<String>? _stringList(Object? value) {
         .toList();
   }
   throw ConfigException('Expected a string array.');
+}
+
+Map<String, Object?> _applyProfileOverlay(
+  Map<String, Object?> root, {
+  required Map<String, Map<String, Object?>> profiles,
+  required String? selectedProfile,
+}) {
+  final base = <String, Object?>{
+    for (final entry in root.entries)
+      if (entry.key != 'profiles') entry.key: _clonePlainValue(entry.value),
+  };
+  if (selectedProfile == null || selectedProfile.isEmpty) {
+    return base;
+  }
+
+  final overlay = profiles[selectedProfile];
+  if (overlay == null) {
+    throw ConfigException('Unknown config profile: $selectedProfile');
+  }
+  return _deepMergeMaps(base, overlay);
+}
+
+Map<String, Object?> _deepMergeMaps(
+  Map<String, Object?> base,
+  Map<String, Object?> overlay,
+) {
+  final merged = <String, Object?>{
+    for (final entry in base.entries) entry.key: _clonePlainValue(entry.value),
+  };
+  for (final entry in overlay.entries) {
+    final existing = merged[entry.key];
+    final incoming = _clonePlainValue(entry.value);
+    if (existing is Map<Object?, Object?> && incoming is Map<Object?, Object?>) {
+      merged[entry.key] = _deepMergeMaps(
+        _mapValue(existing),
+        _mapValue(incoming),
+      );
+      continue;
+    }
+    merged[entry.key] = incoming;
+  }
+  return merged;
+}
+
+Object? _clonePlainValue(Object? value) {
+  if (value is Map<Object?, Object?>) {
+    return value.map<String, Object?>(
+      (Object? key, Object? nestedValue) => MapEntry<String, Object?>(
+        key.toString(),
+        _clonePlainValue(nestedValue),
+      ),
+    );
+  }
+  if (value is List) {
+    return value.map<Object?>((Object? item) => _clonePlainValue(item)).toList();
+  }
+  return value;
 }

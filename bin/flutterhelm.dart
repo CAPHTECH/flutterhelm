@@ -7,6 +7,7 @@ ArgParser buildParser() {
   final serve = ArgParser()
     ..addOption('config', help: 'Override the config.yaml path.')
     ..addOption('state-dir', help: 'Override the mutable state directory.')
+    ..addOption('profile', help: 'Select a named config profile overlay.')
     ..addFlag(
       'allow-root-fallback',
       help: 'Allow workspace_set_root without client roots support.',
@@ -63,10 +64,14 @@ Future<void> main(List<String> arguments) async {
   );
 
   try {
+    final selectedProfile =
+        (command['profile'] as String?) ??
+        Platform.environment[RuntimePaths.profileEnvVar];
     final server = await FlutterHelmServer.create(
       runtimePaths: runtimePaths,
       allowRootFallbackFlag: command['allow-root-fallback'] as bool,
       logLevel: command['log-level'] as String,
+      selectedProfile: selectedProfile,
     );
     await server.run();
   } on ConfigException catch (error) {

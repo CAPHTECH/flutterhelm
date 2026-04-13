@@ -4,6 +4,7 @@ class FlutterHelmToolError implements Exception {
     required this.category,
     required this.message,
     required this.retryable,
+    this.details,
     this.detailsResource,
   });
 
@@ -11,6 +12,7 @@ class FlutterHelmToolError implements Exception {
   final String category;
   final String message;
   final bool retryable;
+  final Map<String, Object?>? details;
   final Map<String, Object?>? detailsResource;
 
   Map<String, Object?> toJson() {
@@ -19,6 +21,7 @@ class FlutterHelmToolError implements Exception {
       'category': category,
       'message': message,
       'retryable': retryable,
+      if (details != null) 'details': details,
       if (detailsResource != null) 'detailsResource': detailsResource,
     };
   }

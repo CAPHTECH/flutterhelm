@@ -28,13 +28,14 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 
 ### Current local alpha surface
 
-この repository の current implementation は Phase 5 相当です。
+この repository の current implementation は Phase 5 に Sprint 8 hardening core を足した状態です。
 
 - `workspace`, `session`, `launcher`, `runtime_readonly`, `tests` workflow を local で実装
 - package search / dependency mutation approval replay / integration tests / coverage readback を含む
 - profiling workflow を local で実装し、backend は `vm_service`、policy は owned-session only
 - platform bridge workflow を local で実装し、mode は `handoff_only`、IDE automation は行わない
 - runtime interaction workflow を local で実装し、UI backend は external adapter、hot op backend は `flutter run --machine`
+- hardening core を local で実装し、busy policy は `fail_fast`、artifact pinning と config profile overlay と compatibility preflight を含む
 - transport は `stdio-first`
 
 ## 3. Workflow Groups
@@ -59,6 +60,7 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 | `workspace_discover` | read_only | Flutter workspace 候補を列挙 |
 | `workspace_set_root` | bounded_mutation | active root を設定 |
 | `workspace_show` | read_only | 現在の root / flavor / defaults を表示 |
+| `compatibility_check` | read_only | 現在の実行環境 compatibility matrix を返す |
 | `analyze_project` | read_only | static analysis を実行 |
 | `resolve_symbol` | read_only | symbol 情報解決 |
 | `format_files` | project_mutation | 対象 file を format |
@@ -73,6 +75,9 @@ FlutterHelm の contract は、単なる tool 一覧ではありません。
 | `session_open` | bounded_mutation | workspace / target / mode の文脈を開く |
 | `session_show` | read_only | session 詳細 |
 | `session_list` | read_only | active sessions 一覧 |
+| `artifact_pin` | bounded_mutation | file-backed artifact を pin する |
+| `artifact_unpin` | bounded_mutation | pin を外す |
+| `artifact_pin_list` | read_only | pin 状態を一覧する |
 | `session_close` | bounded_mutation | session を閉じる |
 
 ## 4.3 launcher
@@ -141,6 +146,17 @@ UI actions は external adapter backend、`capture_screenshot` は `runtime_read
 
 current implementation では platform bridge は `handoff_only` です。
 `native-handoff://...` bundle を生成しますが、Xcode / Android Studio / adb の自動操作は行いません。
+
+## 4.9 hardening capability metadata
+
+current implementation は capability metadata に次を含みます。
+
+- `experimental.hardening.busyPolicy = fail_fast`
+- `experimental.hardening.pinnedArtifacts = true`
+- `experimental.hardening.configProfiles = true`
+- `experimental.hardening.compatibilityResource = config://compatibility/current`
+
+競合する mutation は queue せず、`SESSION_BUSY` または `WORKSPACE_BUSY` で即時失敗します。
 
 ## 5. Sample Tool Schemas
 
@@ -292,6 +308,79 @@ current implementation では platform bridge は `handoff_only` です。
       "coverage": { "type": "boolean", "default": false }
     },
     "required": ["platform", "target"]
+  }
+}
+```
+
+## 5.5 `artifact_pin`
+
+```json
+{
+  "name": "artifact_pin",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "uri": { "type": "string" },
+      "label": { "type": "string" }
+    },
+    "required": ["uri"]
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "uri": "screenshot://sess_01H/capture_01H.png",
+  "kind": "screenshot",
+  "status": "present",
+  "present": true,
+  "label": "keep-for-debug",
+  "pinnedAt": "2026-04-13T00:00:00Z",
+  "updatedAt": "2026-04-13T00:00:00Z",
+  "sessionId": "sess_01H..."
+}
+```
+
+## 5.6 `compatibility_check`
+
+```json
+{
+  "name": "compatibility_check",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "profile": { "type": "string" }
+    }
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "profile": "interactive",
+  "availableProfiles": ["interactive"],
+  "workspaceRoot": "/work/app",
+  "environment": {
+    "os": "macos",
+    "dartVersion": "3.11.0"
+  },
+  "checks": {
+    "flutterCli": {
+      "supported": true,
+      "status": "ok",
+      "requirements": ["flutter must be available on PATH."]
+    }
+  },
+  "workflows": {
+    "runtime_interaction": {
+      "configured": true,
+      "supported": true,
+      "status": "ok"
+    }
   }
 }
 ```

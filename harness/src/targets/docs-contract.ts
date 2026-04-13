@@ -40,7 +40,9 @@ type CheckName =
   | "phase1-runtime-overflow-flow"
   | "phase3-profiling-flow"
   | "phase4-platform-bridge-flow"
-  | "phase5-runtime-interaction-flow";
+  | "phase5-runtime-interaction-flow"
+  | "phase6-hardening-docs"
+  | "phase6-hardening-flow";
 
 interface ContractCaseInput {
   checks?: CheckName[];
@@ -87,7 +89,7 @@ class Phase0HarnessClient {
     repoRoot: string,
     stateDir: string,
     clientRoots: string[],
-    options: { allowRootFallback?: boolean; configPath?: string } = {},
+    options: { allowRootFallback?: boolean; configPath?: string; profile?: string } = {},
   ): Promise<Phase0HarnessClient> {
     const child = spawn(
       "mise",
@@ -101,6 +103,7 @@ class Phase0HarnessClient {
         "--state-dir",
         stateDir,
         ...(options.configPath ? ["--config", options.configPath] : []),
+        ...(options.profile ? ["--profile", options.profile] : []),
         ...(options.allowRootFallback ? ["--allow-root-fallback"] : []),
       ],
       {
@@ -294,12 +297,12 @@ async function withPhase0Client<T>(
 async function withSampleAppClient<T>(
   repoRoot: string,
   callback: (fixture: Phase0Fixture, client: Phase0HarnessClient) => Promise<T>,
-  options: { configText?: string } = {},
+  options: { configText?: string; profile?: string } = {},
 ): Promise<T> {
   const fixture = await createSampleAppFixture(repoRoot);
   const pubGet = await runCommandCapture(
-    "mise",
-    ["exec", "--", "flutter", "pub", "get"],
+    "flutter",
+    ["pub", "get"],
     fixture.workspaceRoot,
   );
   if (pubGet.exitCode !== 0) {
@@ -317,7 +320,7 @@ async function withSampleAppClient<T>(
     repoRoot,
     fixture.stateDir,
     [fixture.workspaceRoot],
-    { configPath },
+    { configPath, profile: options.profile },
   );
   try {
     return await callback(fixture, client);
@@ -637,6 +640,18 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
     ) {
       throw new Error(`Unexpected runtime interaction capability metadata: ${JSON.stringify(runtimeInteraction)}`);
     }
+    const hardening = requireObject(
+      experimental.hardening,
+      "capabilities.experimental.hardening",
+    );
+    if (
+      hardening.busyPolicy !== "fail_fast"
+      || hardening.pinnedArtifacts !== true
+      || hardening.configProfiles !== true
+      || hardening.compatibilityResource !== "config://compatibility/current"
+    ) {
+      throw new Error(`Unexpected hardening capability metadata: ${JSON.stringify(hardening)}`);
+    }
 
     const toolsList = await client.request("tools/list");
     const tools = requireArray(toolsList.tools, "tools/list.tools")
@@ -646,10 +661,14 @@ async function checkPhase1ToolExposure(repoRoot: string): Promise<void> {
     const expectedTools = [
       "analyze_project",
       "attach_app",
+      "artifact_pin",
+      "artifact_pin_list",
+      "artifact_unpin",
       "capture_screenshot",
       "capture_memory_snapshot",
       "capture_timeline",
       "collect_coverage",
+      "compatibility_check",
       "dependency_add",
       "dependency_remove",
       "device_list",
@@ -1346,8 +1365,8 @@ async function checkPhase4PlatformBridgeFlow(repoRoot: string): Promise<void> {
 async function checkPhase5RuntimeInteractionFlow(repoRoot: string): Promise<void> {
   const fixture = await createSampleAppFixture(repoRoot);
   const pubGet = await runCommandCapture(
-    "mise",
-    ["exec", "--", "flutter", "pub", "get"],
+    "flutter",
+    ["pub", "get"],
     fixture.workspaceRoot,
   );
   if (pubGet.exitCode !== 0) {
@@ -1565,6 +1584,252 @@ async function checkPhase5RuntimeInteractionFlow(repoRoot: string): Promise<void
   }
 }
 
+async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
+  await checkRequiredStrings(
+    repoRoot,
+    "README.md",
+    [
+      "Phase 6 hardening core started",
+      "`compatibility_check`",
+      "`artifact_pin`",
+      "`artifact_unpin`",
+      "`artifact_pin_list`",
+      "`config://compatibility/current`",
+      "`config://artifacts/pins`",
+      "`--profile`",
+      "`FLUTTERHELM_PROFILE`",
+    ],
+    "README hardening core",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/07-roadmap.md",
+    [
+      "Phase 6 の Sprint 8 hardening core",
+      "concurrency handling",
+      "pinned artifacts",
+      "config profiles",
+      "compatibility matrix",
+      "Sprint 8",
+    ],
+    "Roadmap Phase 6",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/09-implementation-plan.md",
+    [
+      "### Sprint 8",
+      "session/workspace fail-fast lock",
+      "`artifact_pin`",
+      "`artifact_unpin`",
+      "`artifact_pin_list`",
+      "`compatibility_check`",
+      "config profile overlay",
+    ],
+    "Implementation plan Sprint 8",
+  );
+}
+
+async function checkPhase6HardeningFlow(repoRoot: string): Promise<void> {
+  await withSampleAppClient(
+    repoRoot,
+    async (fixture, client) => {
+      await client.initialize();
+
+      await client.callTool("workspace_set_root", {
+        workspaceRoot: fixture.workspaceRoot,
+      });
+
+      const resourcesList = await client.request("resources/list");
+      const resourceUris = requireArray(resourcesList.resources, "resources/list.resources")
+        .map((value) => requireObject(value, "resource"))
+        .map((value) => requireString(value.uri, "resource.uri"));
+      for (const expected of [
+        "config://workspace/current",
+        "config://workspace/defaults",
+        "config://artifacts/pins",
+        "config://compatibility/current",
+      ]) {
+        if (!resourceUris.includes(expected)) {
+          throw new Error(`resources/list is missing ${expected}`);
+        }
+      }
+
+      const workspaceShow = await client.callTool("workspace_show");
+      const workspaceStructured = requireObject(workspaceShow.structuredContent, "workspace_show.structuredContent");
+      if (workspaceStructured.activeProfile !== "interactive") {
+        throw new Error(`workspace_show.activeProfile should be interactive, got ${String(workspaceStructured.activeProfile)}`);
+      }
+      const availableProfiles = requireArray(
+        workspaceStructured.availableProfiles,
+        "workspace_show.availableProfiles",
+      );
+      if (!availableProfiles.includes("interactive")) {
+        throw new Error(`workspace_show.availableProfiles is missing interactive: ${JSON.stringify(availableProfiles)}`);
+      }
+
+      const workspaceCurrent = await client.request("resources/read", {
+        uri: "config://workspace/current",
+      });
+      const workspaceContents = requireArray(workspaceCurrent.contents, "config://workspace/current contents");
+      const workspaceBody = requireObject(workspaceContents[0], "config://workspace/current body");
+      const workspaceDecoded = JSON.parse(
+        requireString(workspaceBody.text, "config://workspace/current text"),
+      ) as Record<string, unknown>;
+      if (workspaceDecoded.activeProfile !== "interactive") {
+        throw new Error(`config://workspace/current activeProfile mismatch: ${JSON.stringify(workspaceDecoded)}`);
+      }
+
+      const compatibility = await client.callTool("compatibility_check");
+      const compatibilityStructured = requireObject(
+        compatibility.structuredContent,
+        "compatibility_check.structuredContent",
+      );
+      if (compatibilityStructured.profile !== "interactive") {
+        throw new Error(`compatibility_check profile mismatch: ${JSON.stringify(compatibilityStructured)}`);
+      }
+      const compatibilityWorkflows = requireObject(
+        compatibilityStructured.workflows,
+        "compatibility_check.workflows",
+      );
+      const runtimeInteraction = requireObject(
+        compatibilityWorkflows.runtime_interaction,
+        "compatibility_check.workflows.runtime_interaction",
+      );
+      if (runtimeInteraction.configured !== true) {
+        throw new Error(`runtime_interaction compatibility mismatch: ${JSON.stringify(runtimeInteraction)}`);
+      }
+
+      const compatibilityResource = await client.request("resources/read", {
+        uri: "config://compatibility/current",
+      });
+      const compatibilityContents = requireArray(
+        compatibilityResource.contents,
+        "config://compatibility/current contents",
+      );
+      const compatibilityBody = requireObject(
+        compatibilityContents[0],
+        "config://compatibility/current body",
+      );
+      const compatibilityDecoded = JSON.parse(
+        requireString(compatibilityBody.text, "config://compatibility/current text"),
+      ) as Record<string, unknown>;
+      if (compatibilityDecoded.profile !== "interactive") {
+        throw new Error(`config://compatibility/current profile mismatch: ${JSON.stringify(compatibilityDecoded)}`);
+      }
+
+      const unitTests = await client.callTool("run_unit_tests", {
+        coverage: true,
+      });
+      if (unitTests.isError === true) {
+        throw new Error(`run_unit_tests failed: ${JSON.stringify(unitTests.structuredContent)}`);
+      }
+      const unitStructured = requireObject(unitTests.structuredContent, "run_unit_tests.structuredContent");
+      const runId = requireString(unitStructured.runId, "run_unit_tests.runId");
+      const testReportUri = `test-report://${runId}/summary`;
+
+      const pin = await client.callTool("artifact_pin", {
+        uri: testReportUri,
+        label: "keep-for-debug",
+      });
+      if (pin.isError === true) {
+        throw new Error(`artifact_pin failed: ${JSON.stringify(pin.structuredContent)}`);
+      }
+
+      const pinList = await client.callTool("artifact_pin_list", {
+        kind: "test-report",
+      });
+      const pinListStructured = requireObject(pinList.structuredContent, "artifact_pin_list.structuredContent");
+      const pins = requireArray(pinListStructured.pins, "artifact_pin_list.pins")
+        .map((value) => requireObject(value, "pin"));
+      const reportPin = pins.find((entry) => entry.uri === testReportUri);
+      if (!reportPin || reportPin.status !== "present") {
+        throw new Error(`Pinned test report is missing or not present: ${JSON.stringify(pins)}`);
+      }
+
+      const pinsResource = await client.request("resources/read", {
+        uri: "config://artifacts/pins",
+      });
+      const pinsContents = requireArray(pinsResource.contents, "config://artifacts/pins contents");
+      const pinsBody = requireObject(pinsContents[0], "config://artifacts/pins body");
+      const pinsDecoded = JSON.parse(
+        requireString(pinsBody.text, "config://artifacts/pins text"),
+      ) as Record<string, unknown>;
+      const pinnedResources = requireArray(pinsDecoded.pins, "config://artifacts/pins pins");
+      if (!pinnedResources.some((value) => requireObject(value, "pin").uri === testReportUri)) {
+        throw new Error(`config://artifacts/pins is missing ${testReportUri}`);
+      }
+
+      const widgetTestsPromise = client.callTool("run_widget_tests");
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
+      const busyUnitTests = await client.callTool("run_unit_tests");
+      if (busyUnitTests.isError !== true) {
+        throw new Error("run_unit_tests should fail with WORKSPACE_BUSY while run_widget_tests is active");
+      }
+      const busyStructured = requireObject(
+        busyUnitTests.structuredContent,
+        "WORKSPACE_BUSY structuredContent",
+      );
+      const busyError = "error" in busyStructured
+        ? requireObject(busyStructured.error, "WORKSPACE_BUSY error")
+        : busyStructured;
+      if (busyError.code !== "WORKSPACE_BUSY") {
+        throw new Error(`Expected WORKSPACE_BUSY, got ${JSON.stringify(busyError)}`);
+      }
+      const busyDetails = requireObject(busyError.details, "WORKSPACE_BUSY details");
+      if (busyDetails.busyScope !== "workspace" || busyDetails.activeTool !== "run_widget_tests") {
+        throw new Error(`Unexpected WORKSPACE_BUSY details: ${JSON.stringify(busyDetails)}`);
+      }
+      const widgetTests = await widgetTestsPromise;
+      if (widgetTests.isError === true) {
+        throw new Error(`run_widget_tests failed: ${JSON.stringify(widgetTests.structuredContent)}`);
+      }
+
+      const unpin = await client.callTool("artifact_unpin", {
+        uri: testReportUri,
+      });
+      if (unpin.isError === true) {
+        throw new Error(`artifact_unpin failed: ${JSON.stringify(unpin.structuredContent)}`);
+      }
+      const afterUnpin = await client.callTool("artifact_pin_list", {
+        kind: "test-report",
+      });
+      const afterUnpinStructured = requireObject(
+        afterUnpin.structuredContent,
+        "artifact_pin_list after unpin.structuredContent",
+      );
+      const afterPins = requireArray(afterUnpinStructured.pins, "artifact_pin_list after unpin pins");
+      if (afterPins.some((value) => requireObject(value, "pin").uri === testReportUri)) {
+        throw new Error(`artifact_unpin did not remove ${testReportUri}`);
+      }
+    },
+    {
+      configText: `version: 1
+enabledWorkflows:
+  - workspace
+  - session
+  - launcher
+  - runtime_readonly
+  - tests
+  - profiling
+  - platform_bridge
+profiles:
+  interactive:
+    enabledWorkflows:
+      - workspace
+      - session
+      - launcher
+      - runtime_readonly
+      - tests
+      - profiling
+      - platform_bridge
+      - runtime_interaction
+`,
+      profile: "interactive",
+    },
+  );
+}
+
 async function checkMkDocsBuild(repoRoot: string, harnessRoot: string): Promise<void> {
   const docsPython = resolveDocsPython(harnessRoot);
   if (!(await pathExists(docsPython))) {
@@ -1665,8 +1930,12 @@ async function checkWorkflowGroups(repoRoot: string): Promise<void> {
 async function checkToolRiskCatalog(repoRoot: string): Promise<void> {
   const markdown = await readRepoText(repoRoot, "docs/04-mcp-contract.md");
   const requiredChecks = [
+    { heading: "## 4.1 workspace", tool: "compatibility_check", risk: "read_only" },
     { heading: "## 4.1 workspace", tool: "dependency_add", risk: "project_mutation" },
     { heading: "## 4.1 workspace", tool: "dependency_remove", risk: "project_mutation" },
+    { heading: "## 4.2 session", tool: "artifact_pin", risk: "bounded_mutation" },
+    { heading: "## 4.2 session", tool: "artifact_unpin", risk: "bounded_mutation" },
+    { heading: "## 4.2 session", tool: "artifact_pin_list", risk: "read_only" },
     { heading: "## 4.3 launcher", tool: "run_app", risk: "runtime_control" },
     { heading: "## 4.3 launcher", tool: "build_app", risk: "build_control" },
     { heading: "## 4.4 runtime_readonly", tool: "capture_screenshot", risk: "bounded_mutation" },
@@ -1817,6 +2086,8 @@ async function checkResourceUriContract(repoRoot: string): Promise<void> {
     "session://<session-id>/health",
     "config://workspace/current",
     "config://workspace/defaults",
+    "config://artifacts/pins",
+    "config://compatibility/current",
     "log://<session-id>/stdout",
     "log://<session-id>/stderr",
     "runtime-errors://<session-id>/current",
@@ -1852,7 +2123,8 @@ async function checkResourceMetadataRetention(repoRoot: string): Promise<void> {
 
   const metadataRetention = extractBulletItems(markdown, "### Metadata retention");
   const heavyRetention = extractBulletItems(markdown, "### Heavy artifacts retention");
-  const capacityManagement = extractBulletItems(markdown, "### Capacity management");
+  const currentImplementation = extractBulletItems(markdown, "### Current implementation");
+  const capacityManagement = extractBulletItems(markdown, "### Future capacity management");
 
   for (const item of ["session metadata: 30 days", "audit log: 30 days"]) {
     if (!metadataRetention.includes(item)) {
@@ -1869,6 +2141,16 @@ async function checkResourceMetadataRetention(repoRoot: string): Promise<void> {
   ]) {
     if (!heavyRetention.includes(item)) {
       throw new Error(`Heavy artifacts retention is missing ${item}`);
+    }
+  }
+
+  for (const item of [
+    "server startup 時に age-based retention sweep を実行",
+    "pinned artifact は sweep 対象から外す",
+    "stale pin entry は unpin されるまで保持する",
+  ]) {
+    if (!currentImplementation.includes(item)) {
+      throw new Error(`Current implementation retention is missing ${item}`);
     }
   }
 
@@ -1947,6 +2229,8 @@ const CHECKS: Record<CheckName, (repoRoot: string, harnessRoot: string) => Promi
   "phase3-profiling-flow": (repoRoot) => checkPhase3ProfilingFlow(repoRoot),
   "phase4-platform-bridge-flow": (repoRoot) => checkPhase4PlatformBridgeFlow(repoRoot),
   "phase5-runtime-interaction-flow": (repoRoot) => checkPhase5RuntimeInteractionFlow(repoRoot),
+  "phase6-hardening-docs": (repoRoot) => checkPhase6HardeningDocs(repoRoot),
+  "phase6-hardening-flow": (repoRoot) => checkPhase6HardeningFlow(repoRoot),
 };
 
 async function main(): Promise<void> {

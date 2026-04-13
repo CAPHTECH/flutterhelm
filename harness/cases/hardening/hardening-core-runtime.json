@@ -1,0 +1,16 @@
+{
+  "id": "hardening-core-runtime",
+  "mode": "software",
+  "tags": ["hardening"],
+  "input": {
+    "checks": ["phase6-hardening-docs", "phase6-hardening-flow"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": [
+      "check:phase6-hardening-docs:ok",
+      "check:phase6-hardening-flow:ok",
+      "summary:hardening-core-runtime"
+    ]
+  }
+}

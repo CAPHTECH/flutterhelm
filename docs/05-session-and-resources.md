@@ -156,6 +156,8 @@ FlutterHelm はこれを徹底します。
 - `session://<session-id>/health`
 - `config://workspace/current`
 - `config://workspace/defaults`
+- `config://artifacts/pins`
+- `config://compatibility/current`
 
 ## 7.2 logs / diagnostics
 
@@ -286,7 +288,13 @@ native handoff resource は JSON manifest です。zip export ではなく、既
 - profiles / timelines / memory snapshots: 7 days
 - screenshots: 7 days
 
-### Capacity management
+### Current implementation
+
+- server startup 時に age-based retention sweep を実行
+- pinned artifact は sweep 対象から外す
+- stale pin entry は unpin されるまで保持する
+
+### Future capacity management
 
 - workspace 単位で容量上限を持つ
 - 上限超過時は LRU で削除

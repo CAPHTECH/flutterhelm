@@ -33,6 +33,9 @@ flutterhelm/
 │  │  ├─ artifact.dart
 │  │  ├─ resource_mapper.dart
 │  │  └─ retention.dart
+│  ├─ hardening/
+│  │  ├─ operation_coordinator.dart
+│  │  └─ tools.dart
 │  ├─ adapters/
 │  │  ├─ delegate/
 │  │  │  └─ dart_flutter_mcp_delegate.dart
@@ -183,6 +186,17 @@ fallbacks:
 retention:
   heavyArtifactsDays: 7
   metadataDays: 30
+profiles:
+  interactive:
+    enabledWorkflows:
+      - workspace
+      - session
+      - launcher
+      - runtime_readonly
+      - tests
+      - profiling
+      - platform_bridge
+      - runtime_interaction
 safety:
   confirmBefore:
     - dependency_add
@@ -240,6 +254,12 @@ Phase 5 ではさらに以下を追加します。
 - `artifacts/sessions/<session-id>/screenshot-<capture-id>.jpg`
 
 runtime interaction backend は current implementation では external adapter 固定です。`capture_screenshot` は `runtime_readonly` workflow に残し、resource read は binary `blob` payload を返します。
+
+Phase 6 の Sprint 8 ではさらに以下を追加します。
+
+- `artifacts/pins.json`
+
+current implementation では retention は server startup 時の age-based sweep で、pinned artifact は対象から外します。capacity-based LRU は次の sprint に送ります。
 
 ## 5. First sprint plan
 
@@ -309,6 +329,18 @@ runtime interaction backend は current implementation では external adapter �
 - `session://<id>/health` runtime driver fields
 - semantic locator contract
 - opt-in runtime interaction workflow
+
+### Sprint 8
+
+- session/workspace fail-fast lock
+- `artifact_pin`
+- `artifact_unpin`
+- `artifact_pin_list`
+- `config://artifacts/pins`
+- `compatibility_check`
+- `config://compatibility/current`
+- config profile overlay
+- startup retention sweep skipping pinned artifacts
 
 ## 6. Test strategy
 

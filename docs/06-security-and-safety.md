@@ -94,6 +94,8 @@ logs, env, tool output に含まれる secret を mask する。
 - attached session への kill は拒否
 - `hot_restart` は state 破壊を明示
 - stale session では restart を拒否し、再 run/attach を促す
+- 同一 session に対する mutation / profiling / interaction は fail-fast lock で直列化せず、競合時は `SESSION_BUSY` を返す
+- 同一 workspace に対する test / format / dependency mutation / run は fail-fast lock を使い、競合時は `WORKSPACE_BUSY` を返す
 
 ### PID trust model
 
@@ -175,6 +177,17 @@ FlutterHelm は `Info.plist`、Bonjour 設定、session health、recent logs を
   "result": "success"
 }
 ```
+
+## 11.1 Artifact pinning
+
+diagnostics を後で native handoff や人間レビューに渡すため、file-backed artifact は明示的に pin できます。
+
+- `artifact_pin`
+- `artifact_unpin`
+- `artifact_pin_list`
+- `config://artifacts/pins`
+
+pin は retention sweep を止めるための明示操作であり、`config://` や `session://.../summary|health` のような軽量 resource には使いません。
 
 ## 12. Failure Disclosure
 

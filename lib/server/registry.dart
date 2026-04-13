@@ -133,6 +133,21 @@ List<ToolDefinition> _buildDefinitions() {
       implemented: true,
     ),
     ToolDefinition(
+      name: 'compatibility_check',
+      title: 'Compatibility Check',
+      description: 'Probe the current environment compatibility matrix.',
+      workflow: 'workspace',
+      risk: RiskClass.readOnly,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'profile': <String, Object?>{'type': 'string'},
+        },
+        'additionalProperties': false,
+      },
+    ),
+    ToolDefinition(
       name: 'analyze_project',
       title: 'Analyze Project',
       description: 'Run static analysis.',
@@ -278,6 +293,55 @@ List<ToolDefinition> _buildDefinitions() {
       workflow: 'session',
       risk: RiskClass.readOnly,
       implemented: true,
+    ),
+    ToolDefinition(
+      name: 'artifact_pin',
+      title: 'Artifact Pin',
+      description: 'Pin a file-backed artifact resource so retention skips it.',
+      workflow: 'session',
+      risk: RiskClass.boundedMutation,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'uri': <String, Object?>{'type': 'string'},
+          'label': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['uri'],
+        'additionalProperties': false,
+      },
+    ),
+    ToolDefinition(
+      name: 'artifact_unpin',
+      title: 'Artifact Unpin',
+      description: 'Remove a pinned artifact entry.',
+      workflow: 'session',
+      risk: RiskClass.boundedMutation,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'uri': <String, Object?>{'type': 'string'},
+        },
+        'required': <String>['uri'],
+        'additionalProperties': false,
+      },
+    ),
+    ToolDefinition(
+      name: 'artifact_pin_list',
+      title: 'Artifact Pin List',
+      description: 'List pinned artifacts and their presence status.',
+      workflow: 'session',
+      risk: RiskClass.readOnly,
+      implemented: true,
+      inputSchema: <String, Object?>{
+        'type': 'object',
+        'properties': <String, Object?>{
+          'sessionId': <String, Object?>{'type': 'string'},
+          'kind': <String, Object?>{'type': 'string'},
+        },
+        'additionalProperties': false,
+      },
     ),
     ToolDefinition(
       name: 'session_close',

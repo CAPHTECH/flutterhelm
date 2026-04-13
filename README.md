@@ -15,14 +15,14 @@ FlutterHelm は、これらを置き換えるものではありません。
 
 ## ステータス
 
-- 状態: **Local alpha implementation**
-- 実装: **Phase 5 optional runtime interaction core is available in this repository**
+- 状態: **Local alpha implementation with Phase 6 hardening core started**
+- 実装: **Phase 5 optional runtime interaction + Sprint 8 hardening core are available in this repository**
 - 実装前提: MCP client は最低でも **Tools** と **Resources** を扱えること
 - 推奨: **Roots** を扱えること
 - 初期 transport: **stdio-first**
 - 主要スコープ: Flutter ローカル開発、実行中アプリの観測、テスト、profiling、native handoff
 
-現在コードで実装されているのは Phase 5 のローカル反復面です。
+現在コードで実装されているのは Phase 5 のローカル反復面に、Sprint 8 hardening core を足した面です。
 
 - `workspace_discover`
 - `analyze_project`
@@ -32,9 +32,13 @@ FlutterHelm は、これらを置き換えるものではありません。
 - `dependency_add`
 - `dependency_remove`
 - `workspace_show`
+- `compatibility_check`
 - `workspace_set_root`
 - `session_open`
 - `session_list`
+- `artifact_pin`
+- `artifact_unpin`
+- `artifact_pin_list`
 - `device_list`
 - `run_app`
 - `attach_app`
@@ -69,6 +73,7 @@ profiling は `vm_service` backend で動作し、`cpu://`, `timeline://`, `memo
 platform bridge は handoff-only で動作し、`native-handoff://<session-id>/ios|android` bundle を返します。これは native debugger を置き換えるものではなく、Xcode / Android Studio に持ち込むための文脈束です。
 runtime interaction は external adapter backend で実装されていますが、workflow は opt-in のままです。`tap_widget`, `enter_text`, `scroll_until_visible`, `hot_reload`, `hot_restart` は `runtime_interaction` を有効化した時だけ露出します。`capture_screenshot` は `runtime_readonly` に残し、driver 未接続時は iOS simulator なら `simctl` fallback を使います。
 session metadata は `stateDir/sessions.json` に永続化され、artifact は `stateDir/artifacts/` に保存されます。live process handle 自体は process lifetime のみです。
+Sprint 8 では fail-fast concurrency handling、file-backed artifact pinning、config profile overlay、compatibility preflight を追加しています。競合する mutation は `SESSION_BUSY` / `WORKSPACE_BUSY` で即座に拒否され、pin 済み artifact は startup retention sweep の対象から外れます。
 
 ## なぜ別レイヤが必要か
 
@@ -167,7 +172,29 @@ config/state の既定配置は `~/.config/flutterhelm/` です。
 - `audit.jsonl`
 - `artifacts/`
 
-必要なら `--config` と `--state-dir` で上書きできます。
+必要なら `--config`, `--state-dir`, `--profile` で上書きできます。`FLUTTERHELM_PROFILE` でも profile を選べます。
+
+`profiles.<name>` overlay を config に定義すると、workflow/adapters/fallbacks/retention などを切り替えられます。
+
+```yaml
+version: 1
+profiles:
+  interactive:
+    enabledWorkflows:
+      - workspace
+      - session
+      - launcher
+      - runtime_readonly
+      - tests
+      - profiling
+      - platform_bridge
+      - runtime_interaction
+    adapters:
+      runtimeDriver:
+        enabled: true
+```
+
+hardening 系の read-only resource として、`config://compatibility/current` と `config://artifacts/pins` も公開されます。
 
 repo-local の deterministic fixture は `fixtures/sample_app/` にあります。
 
@@ -190,10 +217,11 @@ mise exec -- pnpm -C harness runtime
 mise exec -- pnpm -C harness profiling
 mise exec -- pnpm -C harness bridge
 mise exec -- pnpm -C harness interaction
+mise exec -- pnpm -C harness hardening
 mise exec -- pnpm -C harness qa
 ```
 
 `bootstrap` は `harness/.venv-docs` に MkDocs を導入するため、global な `mkdocs` install は不要です。  
 `smoke` / `contracts` / `runtime` を回す前に `mise trust && mise install && mise exec -- dart pub get` を済ませてください。  
 report は `harness/reports/`、QA trace は `harness/traces/` に残ります。
-`contracts` は package approval replay / coverage readback / platform bridge exposure / Phase 5 capability metadata まで、`runtime` は macOS + Xcode simulator 前提で overflow 診断と integration test まで見ます。`profiling` は同じく local simulator 上で VM service-backed profiling capture と session health を見ます。`bridge` は iOS native handoff bundle と synthetic Android handoff contract を見ます。`interaction` は opt-in runtime driver を有効にして screenshot / semantic tap-text-scroll / hot reload-restart / attached-session guard を見ます。
+`contracts` は package approval replay / coverage readback / platform bridge exposure / Phase 5 capability metadata まで、`runtime` は macOS + Xcode simulator 前提で overflow 診断と integration test まで見ます。`profiling` は同じく local simulator 上で VM service-backed profiling capture と session health を見ます。`bridge` は iOS native handoff bundle と synthetic Android handoff contract を見ます。`interaction` は opt-in runtime driver を有効にして screenshot / semantic tap-text-scroll / hot reload-restart / attached-session guard を見ます。`hardening` は profile overlay, compatibility preflight, artifact pin lifecycle, busy rejection を見ます。

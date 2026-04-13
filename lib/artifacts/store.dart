@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutterhelm/artifacts/resources.dart';
+import 'package:flutterhelm/config/config.dart';
 import 'package:path/path.dart' as p;
 
 class ArtifactStore {
@@ -275,6 +276,67 @@ class ArtifactStore {
       text: resolved.binary ? null : await file.readAsString(),
       blob: resolved.binary ? base64Encode(await file.readAsBytes()) : null,
     );
+  }
+
+  bool supportsPinning(String uri) => _resolveFile(uri) != null;
+
+  String? storedResourceKind(String uri) {
+    if (!supportsPinning(uri)) {
+      return null;
+    }
+    final index = uri.indexOf('://');
+    if (index <= 0) {
+      return null;
+    }
+    return uri.substring(0, index);
+  }
+
+  Future<bool> storedResourceExists(String uri) async {
+    final resolved = _resolveFile(uri);
+    if (resolved == null) {
+      return false;
+    }
+    return File(resolved.path).exists();
+  }
+
+  Future<Map<String, Object?>> sweepRetention({
+    required RetentionConfig retention,
+    required Set<String> pinnedUris,
+  }) async {
+    final cutoff = DateTime.now().toUtc().subtract(
+      Duration(days: retention.heavyArtifactsDays),
+    );
+    final removedUris = <String>[];
+    final retainedPinnedUris = <String>[];
+    final candidates = await _listStoredArtifactEntries();
+
+    for (final entry in candidates) {
+      if (pinnedUris.contains(entry.uri)) {
+        retainedPinnedUris.add(entry.uri);
+        continue;
+      }
+      final file = File(entry.path);
+      if (!await file.exists()) {
+        continue;
+      }
+      final stat = await file.stat();
+      if (!stat.modified.toUtc().isBefore(cutoff)) {
+        continue;
+      }
+      await file.delete();
+      removedUris.add(entry.uri);
+    }
+
+    await _removeEmptyArtifactDirectories();
+
+    return <String, Object?>{
+      'status': 'completed',
+      'cutoff': cutoff.toIso8601String(),
+      'removedCount': removedUris.length,
+      'removedUris': removedUris,
+      'retainedPinnedCount': retainedPinnedUris.length,
+      'retainedPinnedUris': retainedPinnedUris,
+    };
   }
 
   Future<List<ResourceDescriptor>> listSessionResources(String sessionId) async {
@@ -601,6 +663,70 @@ class ArtifactStore {
     );
   }
 
+  Future<List<_StoredArtifactEntry>> _listStoredArtifactEntries() async {
+    final entries = <_StoredArtifactEntry>[];
+
+    final sessionsDir = Directory(p.join(_artifactsDir, 'sessions'));
+    if (await sessionsDir.exists()) {
+      await for (final entity in sessionsDir.list()) {
+        if (entity is! Directory) {
+          continue;
+        }
+        final sessionId = p.basename(entity.path);
+        final descriptors = await listSessionResources(sessionId);
+        for (final descriptor in descriptors) {
+          final resolved = _resolveFile(descriptor.uri);
+          if (resolved == null) {
+            continue;
+          }
+          entries.add(_StoredArtifactEntry(uri: descriptor.uri, path: resolved.path));
+        }
+      }
+    }
+
+    final testRunDescriptors = await listTestRunResources();
+    for (final descriptor in testRunDescriptors) {
+      final resolved = _resolveFile(descriptor.uri);
+      if (resolved == null) {
+        continue;
+      }
+      entries.add(_StoredArtifactEntry(uri: descriptor.uri, path: resolved.path));
+    }
+
+    final mutationDescriptors = await listMutationResources();
+    for (final descriptor in mutationDescriptors) {
+      final resolved = _resolveFile(descriptor.uri);
+      if (resolved == null) {
+        continue;
+      }
+      entries.add(_StoredArtifactEntry(uri: descriptor.uri, path: resolved.path));
+    }
+
+    return entries;
+  }
+
+  Future<void> _removeEmptyArtifactDirectories() async {
+    final roots = <Directory>[
+      Directory(p.join(_artifactsDir, 'sessions')),
+      Directory(p.join(_artifactsDir, 'test-runs')),
+      Directory(p.join(_artifactsDir, 'mutations')),
+    ];
+    for (final root in roots) {
+      if (!await root.exists()) {
+        continue;
+      }
+      await for (final entity in root.list()) {
+        if (entity is! Directory) {
+          continue;
+        }
+        final items = await entity.list().toList();
+        if (items.isEmpty) {
+          await entity.delete();
+        }
+      }
+    }
+  }
+
   _ResolvedStoredFile? _resolveFile(String uri) {
     final logMatch = RegExp(r'^log://([^/]+)/(stdout|stderr)$').firstMatch(uri);
     if (logMatch != null) {
@@ -730,4 +856,14 @@ class _ResolvedStoredFile {
   final String path;
   final String mimeType;
   final bool binary;
+}
+
+class _StoredArtifactEntry {
+  const _StoredArtifactEntry({
+    required this.uri,
+    required this.path,
+  });
+
+  final String uri;
+  final String path;
 }

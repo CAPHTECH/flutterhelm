@@ -3,8 +3,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutterhelm/artifacts/store.dart';
+import 'package:flutterhelm/artifacts/pins.dart';
 import 'package:flutterhelm/artifacts/resources.dart';
 import 'package:flutterhelm/config/config.dart';
+import 'package:flutterhelm/hardening/operation_coordinator.dart';
+import 'package:flutterhelm/hardening/tools.dart';
 import 'package:flutterhelm/launcher/tools.dart';
 import 'package:flutterhelm/platform_bridge/tools.dart';
 import 'package:flutterhelm/policies/approvals.dart';
@@ -80,6 +83,8 @@ class FlutterHelmServer {
     required this.sessionStore,
     required this.processRunner,
     required this.workspaceTools,
+    required this.hardeningTools,
+    required this.operationCoordinator,
     required this.runtimeInteractionTools,
     required this.launcherTools,
     required this.runtimeTools,
@@ -103,6 +108,8 @@ class FlutterHelmServer {
   final SessionStore sessionStore;
   final ProcessRunner processRunner;
   final WorkspaceToolService workspaceTools;
+  final HardeningToolService hardeningTools;
+  final OperationCoordinator operationCoordinator;
   final RuntimeInteractionToolService runtimeInteractionTools;
   final LauncherToolService launcherTools;
   final RuntimeToolService runtimeTools;
@@ -125,17 +132,31 @@ class FlutterHelmServer {
     required RuntimePaths runtimePaths,
     required bool allowRootFallbackFlag,
     required String logLevel,
+    String? selectedProfile,
   }) async {
     final configRepository = ConfigRepository(runtimePaths);
-    final config = await configRepository.load();
+    final config = await configRepository.load(selectedProfile: selectedProfile);
     final stateRepository = StateRepository(runtimePaths);
     final state = await stateRepository.load();
     final allowRootFallback =
         allowRootFallbackFlag || config.fallbacks.allowRootFallback;
     final artifactStore = ArtifactStore(stateDir: runtimePaths.stateDir);
+    final artifactPinStore = await ArtifactPinStore.create(
+      stateDir: runtimePaths.stateDir,
+    );
+    await artifactStore.sweepRetention(
+      retention: config.retention,
+      pinnedUris: artifactPinStore.pinnedUris,
+    );
     final approvalStore = await ApprovalStore.create(stateDir: runtimePaths.stateDir);
     final sessionStore = await SessionStore.create(stateDir: runtimePaths.stateDir);
     final processRunner = const ProcessRunner();
+    final hardeningTools = HardeningToolService(
+      artifactStore: artifactStore,
+      pinStore: artifactPinStore,
+      processRunner: processRunner,
+      configRepository: configRepository,
+    );
     final runtimeInteractionTools = RuntimeInteractionToolService(
       sessionStore: sessionStore,
       artifactStore: artifactStore,
@@ -159,6 +180,14 @@ class FlutterHelmServer {
         artifactStore: artifactStore,
         sessionHealthBuilder: runtimeInteractionTools.healthForSession,
         sessionAppStateBuilder: runtimeInteractionTools.appStateForSession,
+        pinsIndexBuilder: hardeningTools.pinsIndex,
+        compatibilityBuilder: (
+          FlutterHelmConfig config,
+          ServerState state,
+        ) => hardeningTools.compatibilityCheck(
+          config: config,
+          activeRoot: state.activeRoot,
+        ),
       ),
       sessionStore: sessionStore,
       processRunner: processRunner,
@@ -167,6 +196,8 @@ class FlutterHelmServer {
         artifactStore: artifactStore,
         flutterExecutable: config.adapters.flutterExecutable,
       ),
+      hardeningTools: hardeningTools,
+      operationCoordinator: OperationCoordinator(),
       runtimeInteractionTools: runtimeInteractionTools,
       launcherTools: LauncherToolService(
         processRunner: processRunner,
@@ -471,7 +502,7 @@ class FlutterHelmServer {
         'version': flutterHelmVersion,
       },
       'instructions':
-          'Phase 5 server: use tools for workspace/package/run/test orchestration, vm_service-backed profiling, handoff-only native bridge generation, screenshot capture, and opt-in runtime interaction; use resources for logs, widget trees, runtime errors, reports, coverage, session health, profiling captures, screenshots, and native handoff bundles.',
+          'Phase 6 hardening server: use tools for workspace/package/run/test orchestration, vm_service-backed profiling, handoff-only native bridge generation, screenshot capture, opt-in runtime interaction, explicit artifact pinning, and compatibility preflight; use resources for logs, widget trees, runtime errors, reports, coverage, session health, profiling captures, screenshots, native handoff bundles, pinned artifact index, and compatibility state.',
     };
   }
 
@@ -512,6 +543,8 @@ class FlutterHelmServer {
             'clientRoots': snapshot.clientRoots,
             'configuredRoots': snapshot.configuredRoots,
             'activeRoot': _state.activeRoot,
+            'activeProfile': config.activeProfile,
+            'availableProfiles': config.availableProfiles,
             'defaults': config.defaults.toJson(),
             'configuredWorkflows': config.enabledWorkflows,
             'implementedWorkflows': _implementedWorkflows(),
@@ -523,11 +556,13 @@ class FlutterHelmServer {
             'runtimeInteractionDefaultEnabled': false,
             'screenshotWorkflow': 'runtime_readonly',
             'hotOpsOwnershipPolicy': 'owned_only',
+            'compatibilityResource': 'config://compatibility/current',
             'resources': resources
                 .where(
                   (ResourceDescriptor resource) =>
                       resource.uri == 'config://workspace/current' ||
-                      resource.uri == 'config://workspace/defaults',
+                      resource.uri == 'config://workspace/defaults' ||
+                      resource.uri == 'config://compatibility/current',
                 )
                 .map((ResourceDescriptor resource) => resource.toJson())
                 .toList(),
@@ -543,10 +578,33 @@ class FlutterHelmServer {
                 .where(
                   (ResourceDescriptor resource) =>
                       resource.uri == 'config://workspace/current' ||
-                      resource.uri == 'config://workspace/defaults',
+                      resource.uri == 'config://workspace/defaults' ||
+                      resource.uri == 'config://compatibility/current',
                 )
                 .map((ResourceDescriptor resource) => resource.toResourceLink())
                 .toList(),
+          );
+        case 'compatibility_check':
+          final requestedProfile = arguments['profile'] as String?;
+          final compatibility = await hardeningTools.compatibilityCheck(
+            profile: requestedProfile,
+            config: requestedProfile == null ? config : null,
+            activeRoot: _state.activeRoot,
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Compatibility matrix resolved.',
+            structuredContent: compatibility,
+            workspaceRoot: _state.activeRoot,
+            resourceLinks: requestedProfile == null
+                ? <Map<String, Object?>>[
+                    _resourceLink(
+                      uri: 'config://compatibility/current',
+                      mimeType: 'application/json',
+                      title: 'Current compatibility matrix',
+                    ),
+                  ]
+                : const <Map<String, Object?>>[],
           );
         case 'workspace_set_root':
           final clientRoots = await _getClientRoots();
@@ -615,10 +673,14 @@ class FlutterHelmServer {
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
             arguments['workspaceRoot'] as String?,
           );
-          final analysis = await workspaceTools.analyzeProject(
+          final analysis = await _withWorkspaceLock(
+            toolName: definition.name,
             workspaceRoot: currentWorkspaceRoot,
-            fatalInfos: arguments['fatalInfos'] as bool? ?? false,
-            fatalWarnings: arguments['fatalWarnings'] as bool? ?? true,
+            action: () => workspaceTools.analyzeProject(
+              workspaceRoot: currentWorkspaceRoot!,
+              fatalInfos: arguments['fatalInfos'] as bool? ?? false,
+              fatalWarnings: arguments['fatalWarnings'] as bool? ?? true,
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -650,10 +712,14 @@ class FlutterHelmServer {
             arguments['workspaceRoot'] as String?,
           );
           final paths = _asStringList(arguments['paths']);
-          final formatResult = await workspaceTools.formatFiles(
+          final formatResult = await _withWorkspaceLock(
+            toolName: definition.name,
             workspaceRoot: currentWorkspaceRoot,
-            paths: paths,
-            lineLength: arguments['lineLength'] as int?,
+            action: () => workspaceTools.formatFiles(
+              workspaceRoot: currentWorkspaceRoot!,
+              paths: paths,
+              lineLength: arguments['lineLength'] as int?,
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -687,11 +753,15 @@ class FlutterHelmServer {
           }
           currentApprovalRequestId = addApproval.approvalRequestId;
           final packageName = _requiredString(arguments['package'], 'package');
-          final addResult = await workspaceTools.dependencyAdd(
+          final addResult = await _withWorkspaceLock(
+            toolName: definition.name,
             workspaceRoot: currentWorkspaceRoot,
-            package: packageName,
-            versionConstraint: arguments['versionConstraint'] as String?,
-            devDependency: arguments['devDependency'] as bool? ?? false,
+            action: () => workspaceTools.dependencyAdd(
+              workspaceRoot: currentWorkspaceRoot!,
+              package: packageName,
+              versionConstraint: arguments['versionConstraint'] as String?,
+              devDependency: arguments['devDependency'] as bool? ?? false,
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -724,9 +794,13 @@ class FlutterHelmServer {
           }
           currentApprovalRequestId = removeApproval.approvalRequestId;
           final packageName = _requiredString(arguments['package'], 'package');
-          final removeResult = await workspaceTools.dependencyRemove(
+          final removeResult = await _withWorkspaceLock(
+            toolName: definition.name,
             workspaceRoot: currentWorkspaceRoot,
-            package: packageName,
+            action: () => workspaceTools.dependencyRemove(
+              workspaceRoot: currentWorkspaceRoot!,
+              package: packageName,
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -799,6 +873,73 @@ class FlutterHelmServer {
                   .toList(),
             },
           );
+        case 'artifact_pin':
+          final pinResult = await hardeningTools.artifactPin(
+            uri: _requiredString(arguments['uri'], 'uri'),
+            label: arguments['label'] as String?,
+          );
+          currentSessionId = _sessionIdFromUri(pinResult['uri'] as String);
+          currentWorkspaceRoot = currentSessionId == null
+              ? null
+              : sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Artifact pinned.',
+            structuredContent: pinResult,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: <Map<String, Object?>>[
+              _resourceLink(
+                uri: 'config://artifacts/pins',
+                mimeType: 'application/json',
+                title: 'Pinned artifacts index',
+              ),
+            ],
+          );
+        case 'artifact_unpin':
+          final removedUri = _requiredString(arguments['uri'], 'uri');
+          currentSessionId = _sessionIdFromUri(removedUri);
+          currentWorkspaceRoot = currentSessionId == null
+              ? null
+              : sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final unpinResult = await hardeningTools.artifactUnpin(uri: removedUri);
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Artifact unpinned.',
+            structuredContent: unpinResult,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: <Map<String, Object?>>[
+              _resourceLink(
+                uri: 'config://artifacts/pins',
+                mimeType: 'application/json',
+                title: 'Pinned artifacts index',
+              ),
+            ],
+          );
+        case 'artifact_pin_list':
+          currentSessionId = arguments['sessionId'] as String?;
+          currentWorkspaceRoot = currentSessionId == null
+              ? null
+              : sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          final pinList = await hardeningTools.artifactPinList(
+            sessionId: currentSessionId,
+            kind: arguments['kind'] as String?,
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: '${pinList['count']} pinned artifact(s).',
+            structuredContent: pinList,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: <Map<String, Object?>>[
+              _resourceLink(
+                uri: 'config://artifacts/pins',
+                mimeType: 'application/json',
+                title: 'Pinned artifacts index',
+              ),
+            ],
+          );
         case 'device_list':
           final devices = await launcherTools.listDevices();
           return _toolSuccessExecution(
@@ -814,15 +955,19 @@ class FlutterHelmServer {
           final flavor = arguments['flavor'] as String?;
           final mode = (arguments['mode'] as String?) ?? config.defaults.mode;
           final platform = _requiredString(arguments['platform'], 'platform');
-          final session = await launcherTools.runApp(
+          final session = await _withWorkspaceLock(
+            toolName: definition.name,
             workspaceRoot: currentWorkspaceRoot,
-            target: target,
-            platform: platform,
-            mode: mode,
-            flavor: flavor,
-            dartDefines: _asStringList(arguments['dartDefines']),
-            deviceId: arguments['deviceId'] as String?,
-            sessionId: arguments['sessionId'] as String?,
+            action: () => launcherTools.runApp(
+              workspaceRoot: currentWorkspaceRoot!,
+              target: target,
+              platform: platform,
+              mode: mode,
+              flavor: flavor,
+              dartDefines: _asStringList(arguments['dartDefines']),
+              deviceId: arguments['deviceId'] as String?,
+              sessionId: arguments['sessionId'] as String?,
+            ),
           );
           currentSessionId = session.sessionId;
           return _toolSuccessExecution(
@@ -890,7 +1035,11 @@ class FlutterHelmServer {
           );
         case 'stop_app':
           currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
-          final stopped = await launcherTools.stopApp(sessionId: currentSessionId);
+          final stopped = await _withSessionLock(
+            toolName: definition.name,
+            sessionId: currentSessionId,
+            action: () => launcherTools.stopApp(sessionId: currentSessionId!),
+          );
           currentWorkspaceRoot = stopped.workspaceRoot;
           return _toolSuccessExecution(
             definition: definition,
@@ -971,9 +1120,13 @@ class FlutterHelmServer {
           currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
           currentWorkspaceRoot =
               sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
-          final screenshot = await runtimeInteractionTools.captureScreenshot(
+          final screenshot = await _withSessionLock(
+            toolName: definition.name,
             sessionId: currentSessionId,
-            format: (arguments['format'] as String?) ?? 'png',
+            action: () => runtimeInteractionTools.captureScreenshot(
+              sessionId: currentSessionId!,
+              format: (arguments['format'] as String?) ?? 'png',
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -987,10 +1140,14 @@ class FlutterHelmServer {
           currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
           currentWorkspaceRoot =
               sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
-          final tapped = await runtimeInteractionTools.tapWidget(
+          final tapped = await _withSessionLock(
+            toolName: definition.name,
             sessionId: currentSessionId,
-            locator: _asMap(arguments['locator']),
-            timeoutMs: arguments['timeoutMs'] as int? ?? 3000,
+            action: () => runtimeInteractionTools.tapWidget(
+              sessionId: currentSessionId!,
+              locator: _asMap(arguments['locator']),
+              timeoutMs: arguments['timeoutMs'] as int? ?? 3000,
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -1003,13 +1160,17 @@ class FlutterHelmServer {
           currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
           currentWorkspaceRoot =
               sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
-          final entered = await runtimeInteractionTools.enterText(
+          final entered = await _withSessionLock(
+            toolName: definition.name,
             sessionId: currentSessionId,
-            locator: _asMap(arguments['locator']),
-            text: _requiredString(arguments['text'], 'text'),
-            replaceExisting: arguments['replaceExisting'] as bool? ?? true,
-            submit: arguments['submit'] as bool? ?? false,
-            timeoutMs: arguments['timeoutMs'] as int? ?? 3000,
+            action: () => runtimeInteractionTools.enterText(
+              sessionId: currentSessionId!,
+              locator: _asMap(arguments['locator']),
+              text: _requiredString(arguments['text'], 'text'),
+              replaceExisting: arguments['replaceExisting'] as bool? ?? true,
+              submit: arguments['submit'] as bool? ?? false,
+              timeoutMs: arguments['timeoutMs'] as int? ?? 3000,
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -1022,13 +1183,17 @@ class FlutterHelmServer {
           currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
           currentWorkspaceRoot =
               sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
-          final scrolled = await runtimeInteractionTools.scrollUntilVisible(
+          final scrolled = await _withSessionLock(
+            toolName: definition.name,
             sessionId: currentSessionId,
-            locator: _asMap(arguments['locator']),
-            direction: (arguments['direction'] as String?) ?? 'down',
-            maxScrolls: arguments['maxScrolls'] as int? ?? 8,
-            stepPixels: arguments['stepPixels'] as int?,
-            timeoutMs: arguments['timeoutMs'] as int? ?? 3000,
+            action: () => runtimeInteractionTools.scrollUntilVisible(
+              sessionId: currentSessionId!,
+              locator: _asMap(arguments['locator']),
+              direction: (arguments['direction'] as String?) ?? 'down',
+              maxScrolls: arguments['maxScrolls'] as int? ?? 8,
+              stepPixels: arguments['stepPixels'] as int?,
+              timeoutMs: arguments['timeoutMs'] as int? ?? 3000,
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -1042,7 +1207,11 @@ class FlutterHelmServer {
           currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
           currentWorkspaceRoot =
               sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
-          final reloaded = await launcherTools.hotReload(sessionId: currentSessionId);
+          final reloaded = await _withSessionLock(
+            toolName: definition.name,
+            sessionId: currentSessionId,
+            action: () => launcherTools.hotReload(sessionId: currentSessionId!),
+          );
           return _toolSuccessExecution(
             definition: definition,
             summary: 'Hot reload completed for session $currentSessionId.',
@@ -1066,7 +1235,11 @@ class FlutterHelmServer {
             return restartApproval.shortCircuit!;
           }
           currentApprovalRequestId = restartApproval.approvalRequestId;
-          final restarted = await launcherTools.hotRestart(sessionId: currentSessionId);
+          final restarted = await _withSessionLock(
+            toolName: definition.name,
+            sessionId: currentSessionId,
+            action: () => launcherTools.hotRestart(sessionId: currentSessionId!),
+          );
           return _toolSuccessExecution(
             definition: definition,
             summary: 'Hot restart completed for session $currentSessionId.',
@@ -1079,7 +1252,11 @@ class FlutterHelmServer {
         case 'start_cpu_profile':
           currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
           currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
-          final started = await profilingTools.startCpuProfile(sessionId: currentSessionId);
+          final started = await _withSessionLock(
+            toolName: definition.name,
+            sessionId: currentSessionId,
+            action: () => profilingTools.startCpuProfile(sessionId: currentSessionId!),
+          );
           return _toolSuccessExecution(
             definition: definition,
             summary: 'CPU profiling started for session $currentSessionId.',
@@ -1090,7 +1267,11 @@ class FlutterHelmServer {
         case 'stop_cpu_profile':
           currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
           currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
-          final stopped = await profilingTools.stopCpuProfile(sessionId: currentSessionId);
+          final stopped = await _withSessionLock(
+            toolName: definition.name,
+            sessionId: currentSessionId,
+            action: () => profilingTools.stopCpuProfile(sessionId: currentSessionId!),
+          );
           return _toolSuccessExecution(
             definition: definition,
             summary: 'CPU profiling capture completed for session $currentSessionId.',
@@ -1102,12 +1283,16 @@ class FlutterHelmServer {
         case 'capture_timeline':
           currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
           currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
-          final timeline = await profilingTools.captureTimeline(
+          final timeline = await _withSessionLock(
+            toolName: definition.name,
             sessionId: currentSessionId,
-            durationMs: arguments['durationMs'] as int? ?? 3000,
-            streams: _asStringList(arguments['streams']).isEmpty
-                ? const <String>['all']
-                : _asStringList(arguments['streams']),
+            action: () => profilingTools.captureTimeline(
+              sessionId: currentSessionId!,
+              durationMs: arguments['durationMs'] as int? ?? 3000,
+              streams: _asStringList(arguments['streams']).isEmpty
+                  ? const <String>['all']
+                  : _asStringList(arguments['streams']),
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -1120,9 +1305,13 @@ class FlutterHelmServer {
         case 'capture_memory_snapshot':
           currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
           currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
-          final memory = await profilingTools.captureMemorySnapshot(
+          final memory = await _withSessionLock(
+            toolName: definition.name,
             sessionId: currentSessionId,
-            gc: arguments['gc'] as bool? ?? true,
+            action: () => profilingTools.captureMemorySnapshot(
+              sessionId: currentSessionId!,
+              gc: arguments['gc'] as bool? ?? true,
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -1135,9 +1324,13 @@ class FlutterHelmServer {
         case 'toggle_performance_overlay':
           currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
           currentWorkspaceRoot = sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
-          final overlay = await profilingTools.togglePerformanceOverlay(
+          final overlay = await _withSessionLock(
+            toolName: definition.name,
             sessionId: currentSessionId,
-            enabled: arguments['enabled'] as bool? ?? false,
+            action: () => profilingTools.togglePerformanceOverlay(
+              sessionId: currentSessionId!,
+              enabled: arguments['enabled'] as bool? ?? false,
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -1200,10 +1393,14 @@ class FlutterHelmServer {
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
             arguments['workspaceRoot'] as String?,
           );
-          final unitTests = await testTools.runUnitTests(
+          final unitTests = await _withWorkspaceLock(
+            toolName: definition.name,
             workspaceRoot: currentWorkspaceRoot,
-            targets: _asStringList(arguments['targets']),
-            coverage: arguments['coverage'] as bool? ?? false,
+            action: () => testTools.runUnitTests(
+              workspaceRoot: currentWorkspaceRoot!,
+              targets: _asStringList(arguments['targets']),
+              coverage: arguments['coverage'] as bool? ?? false,
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -1216,10 +1413,14 @@ class FlutterHelmServer {
           currentWorkspaceRoot = await _resolveWorkspaceRoot(
             arguments['workspaceRoot'] as String?,
           );
-          final widgetTests = await testTools.runWidgetTests(
+          final widgetTests = await _withWorkspaceLock(
+            toolName: definition.name,
             workspaceRoot: currentWorkspaceRoot,
-            targets: _asStringList(arguments['targets']),
-            coverage: arguments['coverage'] as bool? ?? false,
+            action: () => testTools.runWidgetTests(
+              workspaceRoot: currentWorkspaceRoot!,
+              targets: _asStringList(arguments['targets']),
+              coverage: arguments['coverage'] as bool? ?? false,
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -1241,13 +1442,17 @@ class FlutterHelmServer {
           if (platform == 'ios') {
             await launcherTools.ensureIosSimulatorBooted(deviceId);
           }
-          final integrationTests = await testTools.runIntegrationTests(
+          final integrationTests = await _withWorkspaceLock(
+            toolName: definition.name,
             workspaceRoot: currentWorkspaceRoot,
-            targets: <String>[target],
-            platform: platform,
-            deviceId: deviceId,
-            flavor: arguments['flavor'] as String?,
-            coverage: arguments['coverage'] as bool? ?? false,
+            action: () => testTools.runIntegrationTests(
+              workspaceRoot: currentWorkspaceRoot!,
+              targets: <String>[target],
+              platform: platform,
+              deviceId: deviceId,
+              flavor: arguments['flavor'] as String?,
+              coverage: arguments['coverage'] as bool? ?? false,
+            ),
           );
           return _toolSuccessExecution(
             definition: definition,
@@ -1280,7 +1485,7 @@ class FlutterHelmServer {
           throw FlutterHelmToolError(
             code: 'TOOL_NOT_IMPLEMENTED',
             category: 'internal',
-            message: 'Tool not implemented in Phase 4: ${definition.name}',
+            message: 'Tool not implemented in Phase 6: ${definition.name}',
             retryable: false,
           );
       }
@@ -1293,6 +1498,30 @@ class FlutterHelmServer {
         approvalRequestId: currentApprovalRequestId,
       );
     }
+  }
+
+  Future<T> _withWorkspaceLock<T>({
+    required String toolName,
+    required String workspaceRoot,
+    required Future<T> Function() action,
+  }) {
+    return operationCoordinator.runLocked(
+      toolName: toolName,
+      workspaceRoot: workspaceRoot,
+      action: action,
+    );
+  }
+
+  Future<T> _withSessionLock<T>({
+    required String toolName,
+    required String sessionId,
+    required Future<T> Function() action,
+  }) {
+    return operationCoordinator.runLocked(
+      toolName: toolName,
+      sessionId: sessionId,
+      action: action,
+    );
   }
 
   Future<RootSnapshot> _currentRootSnapshot() async {

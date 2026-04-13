@@ -49,7 +49,11 @@ void main() {
         containsAll(<String>[
           'analyze_project',
           'attach_app',
+          'artifact_pin',
+          'artifact_pin_list',
+          'artifact_unpin',
           'collect_coverage',
+          'compatibility_check',
           'dependency_add',
           'dependency_remove',
           'device_list',
@@ -127,6 +131,8 @@ void main() {
           .map((Map<Object?, Object?> resource) => resource['uri'])
           .toSet();
       expect(uris, contains('config://workspace/current'));
+      expect(uris, contains('config://artifacts/pins'));
+      expect(uris, contains('config://compatibility/current'));
       expect(uris, contains('session://$sessionId/summary'));
       expect(uris, contains('session://$sessionId/health'));
 
@@ -195,7 +201,7 @@ void main() {
       final deviceList = await client.request('tools/call', <String, Object?>{
         'name': 'device_list',
         'arguments': <String, Object?>{},
-      });
+      }, const Duration(minutes: 2));
       final devices =
           ((deviceList['structuredContent'] as Map<Object?, Object?>)['devices']
                   as List<Object?>)
@@ -952,6 +958,221 @@ void main() {
       },
     );
 
+    test('applies config profiles and manages pinned artifacts', () async {
+      final sandbox = await Directory.systemTemp.createTemp('flutterhelm-e2e');
+      addTearDown(() => sandbox.delete(recursive: true));
+
+      final stateDir = Directory(p.join(sandbox.path, 'state'));
+      final sampleAppRoot = p.join(Directory.current.path, 'fixtures', 'sample_app');
+      final configPath = await _writeConfigFile(
+        p.join(sandbox.path, 'config.yaml'),
+        '''
+version: 1
+workspace:
+  roots:
+    - ${jsonEncode(sampleAppRoot)}
+defaults:
+  target: lib/main.dart
+  mode: debug
+enabledWorkflows:
+  - workspace
+  - session
+  - launcher
+  - runtime_readonly
+  - tests
+  - profiling
+  - platform_bridge
+profiles:
+  interactive:
+    enabledWorkflows:
+      - workspace
+      - session
+      - launcher
+      - runtime_readonly
+      - tests
+      - profiling
+      - platform_bridge
+      - runtime_interaction
+    adapters:
+      runtimeDriver:
+        enabled: true
+        command: ${Platform.resolvedExecutable}
+        args:
+          - run
+          - tool/fake_runtime_driver.dart
+        startupTimeoutMs: 15000
+''',
+      );
+      final client = await _TestMcpClient.start(
+        repoRoot: Directory.current.path,
+        workspaceRoot: sampleAppRoot,
+        stateDir: stateDir.path,
+        configPath: configPath,
+        profile: 'interactive',
+      );
+      addTearDown(client.close);
+
+      await _initializeClient(client);
+
+      final workspaceShow = await client.request('tools/call', <String, Object?>{
+        'name': 'workspace_show',
+        'arguments': <String, Object?>{},
+      });
+      final workspaceStructured =
+          workspaceShow['structuredContent'] as Map<Object?, Object?>;
+      expect(workspaceStructured['activeProfile'], 'interactive');
+      expect(
+        (workspaceStructured['availableProfiles'] as List<Object?>)
+            .contains('interactive'),
+        isTrue,
+      );
+
+      final workspaceCurrent = await client.request('resources/read', <String, Object?>{
+        'uri': 'config://workspace/current',
+      });
+      final workspaceCurrentBody =
+          (workspaceCurrent['contents'] as List<Object?>).single
+              as Map<Object?, Object?>;
+      final workspaceCurrentDecoded =
+          jsonDecode(workspaceCurrentBody['text'] as String) as Map<String, Object?>;
+      expect(workspaceCurrentDecoded['activeProfile'], 'interactive');
+
+      final compatibility = await client.request('tools/call', <String, Object?>{
+        'name': 'compatibility_check',
+        'arguments': <String, Object?>{},
+      });
+      expect(compatibility['isError'], isFalse);
+      final compatibilityStructured =
+          compatibility['structuredContent'] as Map<Object?, Object?>;
+      final workflows =
+          compatibilityStructured['workflows'] as Map<Object?, Object?>;
+      final runtimeInteraction =
+          workflows['runtime_interaction'] as Map<Object?, Object?>;
+      expect(runtimeInteraction['configured'], isTrue);
+
+      final compatibilityResource = await client.request(
+        'resources/read',
+        <String, Object?>{'uri': 'config://compatibility/current'},
+      );
+      final compatibilityResourceBody =
+          (compatibilityResource['contents'] as List<Object?>).single
+              as Map<Object?, Object?>;
+      final compatibilityDecoded =
+          jsonDecode(compatibilityResourceBody['text'] as String)
+              as Map<String, Object?>;
+      expect(compatibilityDecoded['profile'], 'interactive');
+
+      final attached = await client.request('tools/call', <String, Object?>{
+        'name': 'attach_app',
+        'arguments': <String, Object?>{
+          'workspaceRoot': sampleAppRoot,
+          'platform': 'ios',
+          'deviceId': 'fake-ios-simulator',
+          'target': 'lib/main.dart',
+          'mode': 'debug',
+          'debugUrl': 'ws://127.0.0.1:34567/ws',
+        },
+      });
+      expect(attached['isError'], isFalse);
+      final sessionId =
+          ((attached['structuredContent'] as Map<Object?, Object?>)['sessionId'])
+              as String;
+
+      final screenshot = await client.request('tools/call', <String, Object?>{
+        'name': 'capture_screenshot',
+        'arguments': <String, Object?>{'sessionId': sessionId},
+      });
+      expect(screenshot['isError'], isFalse);
+      final screenshotUri =
+          (((screenshot['structuredContent'] as Map<Object?, Object?>)['resource']
+                  as Map<Object?, Object?>)['uri'])
+              as String;
+
+      final pin = await client.request('tools/call', <String, Object?>{
+        'name': 'artifact_pin',
+        'arguments': <String, Object?>{
+          'uri': screenshotUri,
+          'label': 'keep-for-debug',
+        },
+      });
+      expect(pin['isError'], isFalse);
+
+      final list = await client.request('tools/call', <String, Object?>{
+        'name': 'artifact_pin_list',
+        'arguments': <String, Object?>{'sessionId': sessionId},
+      });
+      final pins =
+          ((list['structuredContent'] as Map<Object?, Object?>)['pins']
+                  as List<Object?>)
+              .cast<Map<Object?, Object?>>();
+      expect(pins, hasLength(1));
+      expect(pins.single['uri'], screenshotUri);
+      expect(pins.single['status'], 'present');
+
+      final pinsResource = await client.request(
+        'resources/read',
+        <String, Object?>{'uri': 'config://artifacts/pins'},
+      );
+      final pinsBody =
+          (pinsResource['contents'] as List<Object?>).single
+              as Map<Object?, Object?>;
+      final pinsDecoded =
+          jsonDecode(pinsBody['text'] as String) as Map<String, Object?>;
+      final pinnedArtifacts =
+          (pinsDecoded['pins'] as List<Object?>).cast<Map<Object?, Object?>>();
+      expect(
+        pinnedArtifacts.any((Map<Object?, Object?> item) => item['uri'] == screenshotUri),
+        isTrue,
+      );
+
+      final unpin = await client.request('tools/call', <String, Object?>{
+        'name': 'artifact_unpin',
+        'arguments': <String, Object?>{'uri': screenshotUri},
+      });
+      expect(unpin['isError'], isFalse);
+    });
+
+    test('rejects concurrent workspace operations with WORKSPACE_BUSY', () async {
+      final sandbox = await Directory.systemTemp.createTemp('flutterhelm-e2e');
+      addTearDown(() => sandbox.delete(recursive: true));
+
+      final stateDir = Directory(p.join(sandbox.path, 'state'));
+      final sampleAppRoot = p.join(Directory.current.path, 'fixtures', 'sample_app');
+      final client = await _TestMcpClient.start(
+        repoRoot: Directory.current.path,
+        workspaceRoot: sampleAppRoot,
+        stateDir: stateDir.path,
+      );
+      addTearDown(client.close);
+
+      await _initializeClient(client);
+      await client.request('tools/call', <String, Object?>{
+        'name': 'workspace_set_root',
+        'arguments': <String, Object?>{'workspaceRoot': sampleAppRoot},
+      });
+
+      final first = client.request('tools/call', <String, Object?>{
+        'name': 'run_widget_tests',
+        'arguments': <String, Object?>{},
+      }, const Duration(minutes: 2));
+
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+
+      final second = await client.request('tools/call', <String, Object?>{
+        'name': 'run_unit_tests',
+        'arguments': <String, Object?>{},
+      }, const Duration(minutes: 2));
+
+      expect(second['isError'], isTrue);
+      final error =
+          ((second['structuredContent'] as Map<Object?, Object?>)['error'])
+              as Map<Object?, Object?>;
+      expect(error['code'], 'WORKSPACE_BUSY');
+
+      final completedFirst = await first;
+      expect(completedFirst['isError'], isFalse);
+    });
+
     test(
       'supports runtime interaction contracts with a fake external driver',
       () async {
@@ -1460,6 +1681,7 @@ class _TestMcpClient {
     required String? workspaceRoot,
     required String stateDir,
     String? configPath,
+    String? profile,
     bool allowRootFallback = false,
   }) async {
     final process = await Process.start(Platform.resolvedExecutable, <String>[
@@ -1468,6 +1690,8 @@ class _TestMcpClient {
       'serve',
       if (configPath != null) '--config',
       if (configPath != null) configPath,
+      if (profile != null) '--profile',
+      if (profile != null) profile,
       '--state-dir',
       stateDir,
       if (allowRootFallback) '--allow-root-fallback',

@@ -10,6 +10,12 @@ typedef SessionHealthPayloadBuilder =
     Future<Map<String, Object?>> Function(SessionRecord session);
 typedef SessionAppStatePayloadBuilder =
     Future<Map<String, Object?>> Function(SessionRecord session);
+typedef JsonResourcePayloadBuilder = Future<Map<String, Object?>> Function();
+typedef CompatibilityPayloadBuilder =
+    Future<Map<String, Object?>> Function(
+      FlutterHelmConfig config,
+      ServerState state,
+    );
 
 class ResourceDescriptor {
   const ResourceDescriptor({
@@ -101,11 +107,15 @@ class ResourceCatalog {
     required this.artifactStore,
     required this.sessionHealthBuilder,
     required this.sessionAppStateBuilder,
+    required this.pinsIndexBuilder,
+    required this.compatibilityBuilder,
   });
 
   final ArtifactStore artifactStore;
   final SessionHealthPayloadBuilder sessionHealthBuilder;
   final SessionAppStatePayloadBuilder sessionAppStateBuilder;
+  final JsonResourcePayloadBuilder pinsIndexBuilder;
+  final CompatibilityPayloadBuilder compatibilityBuilder;
 
   Future<List<ResourceDescriptor>> listResources({
     required FlutterHelmConfig config,
@@ -116,6 +126,8 @@ class ResourceCatalog {
     final resources = <ResourceDescriptor>[
       _workspaceCurrentDescriptor(state),
       _workspaceDefaultsDescriptor(config),
+      _artifactPinsDescriptor(),
+      _compatibilityDescriptor(),
       ...sessions.map(_sessionSummaryDescriptor),
       ...sessions.map(_sessionHealthDescriptor),
     ];
@@ -142,6 +154,9 @@ class ResourceCatalog {
         mimeType: 'application/json',
         text: jsonEncode(<String, Object?>{
           ...rootSnapshot.toJson(),
+          'activeProfile': config.activeProfile,
+          'availableProfiles': config.availableProfiles,
+          'compatibilityResource': 'config://compatibility/current',
           'updatedAt': state.updatedAt?.toUtc().toIso8601String(),
         }),
       );
@@ -152,6 +167,22 @@ class ResourceCatalog {
         uri: uri,
         mimeType: 'application/json',
         text: jsonEncode(config.toJson()),
+      );
+    }
+
+    if (uri == 'config://artifacts/pins') {
+      return ResourceReadResult(
+        uri: uri,
+        mimeType: 'application/json',
+        text: jsonEncode(await pinsIndexBuilder()),
+      );
+    }
+
+    if (uri == 'config://compatibility/current') {
+      return ResourceReadResult(
+        uri: uri,
+        mimeType: 'application/json',
+        text: jsonEncode(await compatibilityBuilder(config, state)),
       );
     }
 
@@ -241,6 +272,32 @@ class ResourceCatalog {
       createdAt: DateTime.now().toUtc(),
       lastModified: DateTime.now().toUtc(),
       size: jsonEncode(config.toJson()).length,
+    );
+  }
+
+  ResourceDescriptor _artifactPinsDescriptor() {
+    final now = DateTime.now().toUtc();
+    return ResourceDescriptor(
+      uri: 'config://artifacts/pins',
+      name: 'artifacts.pins',
+      title: 'Pinned artifacts index',
+      description: 'Pinned file-backed artifact resources.',
+      mimeType: 'application/json',
+      createdAt: now,
+      lastModified: now,
+    );
+  }
+
+  ResourceDescriptor _compatibilityDescriptor() {
+    final now = DateTime.now().toUtc();
+    return ResourceDescriptor(
+      uri: 'config://compatibility/current',
+      name: 'compatibility.current',
+      title: 'Current compatibility matrix',
+      description: 'Resolved environment compatibility and workflow support.',
+      mimeType: 'application/json',
+      createdAt: now,
+      lastModified: now,
     );
   }
 

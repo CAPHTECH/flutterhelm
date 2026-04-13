@@ -17,7 +17,7 @@ FlutterHelm は最初から全部を載せるべきではありません。
 
 ## 現在地点
 
-この repository では Phase 5 の optional runtime interaction checkpoint まで実装済みです。
+この repository では Phase 5 の optional runtime interaction checkpoint に加えて、Phase 6 の Sprint 8 hardening core まで実装済みです。
 
 - workspace/session/launcher/runtime_readonly/tests が local で動く
 - repo-local `fixtures/sample_app` で deterministic validation ができる
@@ -26,7 +26,8 @@ FlutterHelm は最初から全部を載せるべきではありません。
 - vm_service-backed profiling / session health / owned-session guard が local で動く
 - native handoff bundle / iOS local-network hypothesis / Android synthetic contract が local で動く
 - opt-in runtime interaction / screenshot artifact / hot reload-restart / attached-session guard が local で動く
-- 以降の優先順位は hardening / ecosystem
+- fail-fast concurrency handling / artifact pinning / config profile overlay / compatibility preflight が local で動く
+- 残りの優先順位は Streamable HTTP preview / adapter extension point / broader ecosystem hardening
 
 ## Phase 0 — Foundation
 
@@ -182,6 +183,11 @@ FlutterHelm は最初から全部を載せるべきではありません。
 - config profiles
 - compatibility matrix
 - extension / plugin point for custom adapters
+
+### Current implementation status
+
+- `concurrency handling`, `pinned artifacts`, `config profiles`, `compatibility matrix` は Sprint 8 として着手済み
+- `Streamable HTTP preview` と `extension / plugin point for custom adapters` は未着手
 
 ### Exit criteria
 
