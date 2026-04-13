@@ -18,6 +18,104 @@ extension SessionOwnershipWireName on SessionOwnership {
   String get wireName => name;
 }
 
+class NativeContext {
+  const NativeContext({
+    required this.providerId,
+    required this.platform,
+    required this.projectPath,
+    required this.workspacePath,
+    required this.scheme,
+    required this.configuration,
+    required this.destination,
+    required this.buildId,
+    required this.launchStatus,
+    required this.nativeDebuggerAttached,
+    required this.flutterRuntimeAttached,
+    this.nativeAppId,
+  });
+
+  final String providerId;
+  final String platform;
+  final String projectPath;
+  final String workspacePath;
+  final String scheme;
+  final String configuration;
+  final String destination;
+  final String buildId;
+  final String launchStatus;
+  final bool nativeDebuggerAttached;
+  final bool flutterRuntimeAttached;
+  final String? nativeAppId;
+
+  NativeContext copyWith({
+    String? providerId,
+    String? platform,
+    String? projectPath,
+    String? workspacePath,
+    String? scheme,
+    String? configuration,
+    String? destination,
+    String? buildId,
+    String? launchStatus,
+    bool? nativeDebuggerAttached,
+    bool? flutterRuntimeAttached,
+    String? nativeAppId,
+  }) {
+    return NativeContext(
+      providerId: providerId ?? this.providerId,
+      platform: platform ?? this.platform,
+      projectPath: projectPath ?? this.projectPath,
+      workspacePath: workspacePath ?? this.workspacePath,
+      scheme: scheme ?? this.scheme,
+      configuration: configuration ?? this.configuration,
+      destination: destination ?? this.destination,
+      buildId: buildId ?? this.buildId,
+      launchStatus: launchStatus ?? this.launchStatus,
+      nativeDebuggerAttached:
+          nativeDebuggerAttached ?? this.nativeDebuggerAttached,
+      flutterRuntimeAttached:
+          flutterRuntimeAttached ?? this.flutterRuntimeAttached,
+      nativeAppId: nativeAppId ?? this.nativeAppId,
+    );
+  }
+
+  factory NativeContext.fromJson(Map<String, Object?> json) {
+    return NativeContext(
+      providerId: json['providerId'] as String? ?? '',
+      platform: json['platform'] as String? ?? '',
+      projectPath: json['projectPath'] as String? ?? '',
+      workspacePath: json['workspacePath'] as String? ?? '',
+      scheme: json['scheme'] as String? ?? '',
+      configuration: json['configuration'] as String? ?? '',
+      destination: json['destination'] as String? ?? '',
+      buildId: json['buildId'] as String? ?? '',
+      launchStatus: json['launchStatus'] as String? ?? 'unknown',
+      nativeDebuggerAttached:
+          json['nativeDebuggerAttached'] as bool? ?? false,
+      flutterRuntimeAttached:
+          json['flutterRuntimeAttached'] as bool? ?? false,
+      nativeAppId: json['nativeAppId'] as String?,
+    );
+  }
+
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'providerId': providerId,
+      'platform': platform,
+      'projectPath': projectPath,
+      'workspacePath': workspacePath,
+      'scheme': scheme,
+      'configuration': configuration,
+      'destination': destination,
+      'buildId': buildId,
+      'launchStatus': launchStatus,
+      'nativeDebuggerAttached': nativeDebuggerAttached,
+      'flutterRuntimeAttached': flutterRuntimeAttached,
+      if (nativeAppId != null) 'nativeAppId': nativeAppId,
+    };
+  }
+}
+
 class SessionRecord {
   const SessionRecord({
     required this.sessionId,
@@ -41,6 +139,7 @@ class SessionRecord {
     required this.lastSeenAt,
     required this.lastExitAt,
     required this.lastExitCode,
+    this.nativeContext,
   });
 
   final String sessionId;
@@ -64,6 +163,7 @@ class SessionRecord {
   final DateTime lastSeenAt;
   final DateTime? lastExitAt;
   final int? lastExitCode;
+  final NativeContext? nativeContext;
 
   factory SessionRecord.context({
     required String sessionId,
@@ -121,6 +221,8 @@ class SessionRecord {
     DateTime? lastSeenAt,
     DateTime? lastExitAt,
     int? lastExitCode,
+    NativeContext? nativeContext,
+    bool clearNativeContext = false,
   }) {
     return SessionRecord(
       sessionId: sessionId,
@@ -148,6 +250,9 @@ class SessionRecord {
       lastSeenAt: lastSeenAt ?? this.lastSeenAt,
       lastExitAt: lastExitAt ?? this.lastExitAt,
       lastExitCode: lastExitCode ?? this.lastExitCode,
+      nativeContext: clearNativeContext
+          ? null
+          : (nativeContext ?? this.nativeContext),
     );
   }
 
@@ -182,6 +287,14 @@ class SessionRecord {
           ? DateTime.parse(json['lastExitAt'] as String).toUtc()
           : null,
       lastExitCode: json['lastExitCode'] as int?,
+      nativeContext: json['nativeContext'] is Map<Object?, Object?>
+          ? NativeContext.fromJson(
+              (json['nativeContext'] as Map<Object?, Object?>).map<String, Object?>(
+                (Object? key, Object? value) =>
+                    MapEntry<String, Object?>(key.toString(), value),
+              ),
+            )
+          : null,
     );
   }
 
@@ -208,12 +321,14 @@ class SessionRecord {
         if (dtdMaskedUri != null) 'maskedUri': dtdMaskedUri,
       },
       'profileActive': profileActive,
-      'adapters': const <String, Object?>{
+      'adapters': <String, Object?>{
         'delegate': 'dart_flutter_mcp',
         'launcher': 'flutter_cli',
         'profiling': 'vm_service',
         'runtimeDriver': null,
+        'nativeBuild': nativeContext?.providerId,
       },
+      if (nativeContext != null) 'nativeContext': nativeContext!.toJson(),
       'createdAt': createdAt.toUtc().toIso8601String(),
       'lastSeenAt': lastSeenAt.toUtc().toIso8601String(),
       'lastExitAt': lastExitAt?.toUtc().toIso8601String(),
@@ -235,6 +350,7 @@ class SessionRecord {
       'stale': stale,
       'profileActive': profileActive,
       'pid': pid,
+      if (nativeContext != null) 'nativeContext': nativeContext!.toJson(),
       'createdAt': createdAt.toUtc().toIso8601String(),
       'lastSeenAt': lastSeenAt.toUtc().toIso8601String(),
     };

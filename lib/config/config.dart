@@ -194,6 +194,7 @@ class AdaptersConfig {
     'flutterCli': 'builtin.flutter.cli',
     'profiling': 'builtin.profiling.vm_service',
     'runtimeDriver': 'builtin.runtime_driver.external_process',
+    'nativeBuild': 'builtin.native_build.external_process',
     'platformBridge': 'builtin.platform_bridge.handoff',
   };
 
@@ -239,6 +240,13 @@ class AdaptersConfig {
         args: runtimeDriverArgs,
         startupTimeoutMs: runtimeDriverStartupTimeoutMs,
         options: <String, Object?>{'enabled': runtimeDriverEnabled},
+      ),
+      'builtin.native_build.external_process': const AdapterProviderConfig(
+        id: 'builtin.native_build.external_process',
+        kind: 'builtin',
+        families: <String>['nativeBuild'],
+        builtin: true,
+        options: <String, Object?>{'enabled': false},
       ),
       'builtin.platform_bridge.handoff': const AdapterProviderConfig(
         id: 'builtin.platform_bridge.handoff',

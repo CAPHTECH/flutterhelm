@@ -188,6 +188,19 @@ current implementation の stable release contract は次を公開します。
 - support level / health / active selection は `workspace_show`, `adapter_list`, `config://adapters/current`, `compatibility_check` で確認可能
 - stable lane は `stdio` と built-in workflow 群を対象とし、HTTP preview は含まない
 
+## 4.12 Sprint 16 beta: native build orchestration
+
+Sprint 16 では iOS-first の native build orchestration を beta として追加する計画です。  
+これは stable lane には含めません。
+
+- workflow group: `native_build`
+- adapter family: `nativeBuild`
+- harness lane: `native-build`
+- intended tools: `native_project_inspect`, `native_build_launch`, `native_attach_flutter_runtime`, `native_stop`
+- expected support level: `beta`
+- platform scope: iOS-first
+- boundary: build / launch / Flutter runtime attach bridge, not Xcode UI automation or LLDB proxying
+
 ## 5. Sample Tool Schemas
 
 ## 5.1 `run_app`

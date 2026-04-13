@@ -84,6 +84,7 @@ session metadata は `stateDir/sessions.json` に永続化され、artifact は 
 Sprint 8 では fail-fast concurrency handling、file-backed artifact pinning、config profile overlay、compatibility preflight を追加しています。競合する mutation は `SESSION_BUSY` / `WORKSPACE_BUSY` で即座に拒否され、pin 済み artifact は startup retention sweep の対象から外れます。
 Sprint 9 では adapter registry を導入し、`config://adapters/current` と `adapter_list` で active provider/family health を見られるようにしました。transport は引き続き `stdio-first` ですが、localhost 限定の `--transport http` preview も追加しています。HTTP preview は request-response only で、SSE/resume は未対応、Roots transport は unsupported のため fallback semantics に従います。
 Sprint 13-15 では support level taxonomy、artifact capacity retention、operability resources、stable lane を追加しました。`stdio` は stable、runtime interaction と custom `stdio_json` provider は beta、HTTP transport は preview のままです。legacy adapter config は stable cut で削除済みです。
+Sprint 16 では native build orchestration の beta wave を計画しています。`native_build` workflow、`nativeBuild` adapter family、`native-build` harness lane を iOS-first で追加する予定ですが、まだ stable lane には入りません。
 
 ## なぜ別レイヤが必要か
 
@@ -176,6 +177,7 @@ mise exec -- dart analyze
 mise exec -- dart test
 mise exec -- dart run bin/flutterhelm.dart serve
 mise exec -- pnpm -C harness beta
+mise exec -- pnpm -C harness native-build
 ```
 
 config/state の既定配置は `~/.config/flutterhelm/` です。
@@ -258,6 +260,7 @@ mise exec -- pnpm -C harness runtime
 mise exec -- pnpm -C harness profiling
 mise exec -- pnpm -C harness bridge
 mise exec -- pnpm -C harness interaction
+mise exec -- pnpm -C harness native-build
 mise exec -- pnpm -C harness hardening
 mise exec -- pnpm -C harness ecosystem
 mise exec -- pnpm -C harness stable
@@ -268,4 +271,4 @@ mise exec -- pnpm -C harness qa
 `bootstrap` は `harness/.venv-docs` に MkDocs を導入するため、global な `mkdocs` install は不要です。  
 `smoke` / `contracts` / `runtime` を回す前に `mise trust && mise install && mise exec -- dart pub get` を済ませてください。  
 report は `harness/reports/`、QA trace は `harness/traces/` に残ります。
-`contracts` は package approval replay / coverage readback / platform bridge exposure / Phase 5 capability metadata まで、`runtime` は macOS + Xcode simulator 前提で overflow 診断と integration test まで見ます。`profiling` は同じく local simulator 上で VM service-backed profiling capture と session health を見ます。`bridge` は iOS native handoff bundle と synthetic Android handoff contract を見ます。`interaction` は opt-in runtime driver を有効にして screenshot / semantic tap-text-scroll / hot reload-restart / attached-session guard を見ます。`hardening` は profile overlay, compatibility preflight, artifact pin lifecycle, capacity-aware retention, support-level metadata, busy rejection を見ます。`ecosystem` は adapter registry visibility と localhost-only HTTP preview session flow を見ます。`stable` は stable support lane だけをまとめて回す集約コマンドで、`beta` は上記に ecosystem / interaction を加えた superset です。
+`contracts` は package approval replay / coverage readback / platform bridge exposure / Phase 5 capability metadata まで、`runtime` は macOS + Xcode simulator 前提で overflow 診断と integration test まで見ます。`profiling` は同じく local simulator 上で VM service-backed profiling capture と session health を見ます。`bridge` は iOS native handoff bundle と synthetic Android handoff contract を見ます。`interaction` は opt-in runtime driver を有効にして screenshot / semantic tap-text-scroll / hot reload-restart / attached-session guard を見ます。`native-build` は Sprint 16 planned beta native build orchestration の docs-only lane で、iOS-first native build / launch / Flutter runtime attach の contract 文言を固定します。`hardening` は profile overlay, compatibility preflight, artifact pin lifecycle, capacity-aware retention, support-level metadata, busy rejection を見ます。`ecosystem` は adapter registry visibility と localhost-only HTTP preview session flow を見ます。`stable` は stable support lane だけをまとめて回す集約コマンドで、`beta` は上記に ecosystem / interaction / native-build を加えた superset です。

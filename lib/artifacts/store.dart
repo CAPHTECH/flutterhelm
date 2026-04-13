@@ -30,6 +30,9 @@ class ArtifactStore {
 
   String sessionHealthUri(String sessionId) => 'session://$sessionId/health';
 
+  String sessionNativeSummaryUri(String sessionId) =>
+      'session://$sessionId/native-summary';
+
   String sessionRuntimeErrorsUri(String sessionId) => 'runtime-errors://$sessionId/current';
 
   String sessionWidgetTreeUri(String sessionId, int depth) =>
@@ -48,6 +51,9 @@ class ArtifactStore {
 
   String sessionNativeHandoffUri(String sessionId, String platform) =>
       'native-handoff://$sessionId/$platform';
+
+  String sessionNativeLogUri(String sessionId, String stream) =>
+      'log://$sessionId/$stream';
 
   String sessionScreenshotUri(
     String sessionId,
@@ -184,6 +190,28 @@ class ArtifactStore {
       payload,
     );
     _recordPublished(sessionNativeHandoffUri(sessionId, platform));
+  }
+
+  Future<void> appendSessionNativeLog({
+    required String sessionId,
+    required String stream,
+    required String line,
+  }) async {
+    final file = File(p.join(sessionArtifactsDir(sessionId), '$stream.log'));
+    await file.parent.create(recursive: true);
+    await file.writeAsString('$line\n', mode: FileMode.append);
+    _recordPublished(sessionNativeLogUri(sessionId, stream));
+  }
+
+  Future<void> writeSessionNativeSummary({
+    required String sessionId,
+    required Map<String, Object?> payload,
+  }) async {
+    await _writeJson(
+      File(p.join(sessionArtifactsDir(sessionId), 'native-summary.json')),
+      payload,
+    );
+    _recordPublished(sessionNativeSummaryUri(sessionId));
   }
 
   Future<void> writeSessionScreenshot({
@@ -522,6 +550,42 @@ class ArtifactStore {
         title: 'App state $sessionId',
         description: 'High-level session state summary.',
         mimeType: 'application/json',
+        sessionId: sessionId,
+      ));
+    }
+    final nativeSummary = File(p.join(dir.path, 'native-summary.json'));
+    if (await nativeSummary.exists()) {
+      resources.add(await _descriptorForFile(
+        file: nativeSummary,
+        uri: sessionNativeSummaryUri(sessionId),
+        name: 'session.nativeSummary.$sessionId',
+        title: 'Native summary $sessionId',
+        description: 'Correlated native build and attach summary.',
+        mimeType: 'application/json',
+        sessionId: sessionId,
+      ));
+    }
+    final nativeBuildLog = File(p.join(dir.path, 'native-build.log'));
+    if (await nativeBuildLog.exists()) {
+      resources.add(await _descriptorForFile(
+        file: nativeBuildLog,
+        uri: sessionNativeLogUri(sessionId, 'native-build'),
+        name: 'session.nativeBuildLog.$sessionId',
+        title: 'Native build log $sessionId',
+        description: 'Collected native build and launch log lines.',
+        mimeType: 'text/plain',
+        sessionId: sessionId,
+      ));
+    }
+    final nativeDeviceLog = File(p.join(dir.path, 'native-device.log'));
+    if (await nativeDeviceLog.exists()) {
+      resources.add(await _descriptorForFile(
+        file: nativeDeviceLog,
+        uri: sessionNativeLogUri(sessionId, 'native-device'),
+        name: 'session.nativeDeviceLog.$sessionId',
+        title: 'Native device log $sessionId',
+        description: 'Collected native device/runtime log lines.',
+        mimeType: 'text/plain',
         sessionId: sessionId,
       ));
     }
@@ -916,7 +980,9 @@ class ArtifactStore {
   }
 
   _ResolvedStoredFile? _resolveFile(String uri) {
-    final logMatch = RegExp(r'^log://([^/]+)/(stdout|stderr)$').firstMatch(uri);
+    final logMatch = RegExp(
+      r'^log://([^/]+)/(stdout|stderr|native-build|native-device)$',
+    ).firstMatch(uri);
     if (logMatch != null) {
       final id = logMatch.group(1)!;
       final stream = logMatch.group(2)!;
@@ -931,6 +997,19 @@ class ArtifactStore {
       return _ResolvedStoredFile(
         path: p.join(mutationArtifactsDir(id), '$stream.log'),
         mimeType: 'text/plain',
+      );
+    }
+
+    final nativeSummaryMatch = RegExp(
+      r'^session://([^/]+)/native-summary$',
+    ).firstMatch(uri);
+    if (nativeSummaryMatch != null) {
+      return _ResolvedStoredFile(
+        path: p.join(
+          sessionArtifactsDir(nativeSummaryMatch.group(1)!),
+          'native-summary.json',
+        ),
+        mimeType: 'application/json',
       );
     }
 

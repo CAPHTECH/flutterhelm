@@ -1809,6 +1809,216 @@ adapters:
     );
 
     test(
+      'supports nativeBuild beta sessions and correlated native resources',
+      () async {
+        final sandbox = await Directory.systemTemp.createTemp(
+          'flutterhelm-native-build',
+        );
+        addTearDown(() => sandbox.delete(recursive: true));
+
+        final stateDir = Directory(p.join(sandbox.path, 'state'));
+        final sampleAppRoot = p.join(
+          Directory.current.path,
+          'fixtures',
+          'sample_app',
+        );
+        final configPath = await _writeConfigFile(
+          p.join(sandbox.path, 'config.yaml'),
+          '''
+version: 1
+workspace:
+  roots:
+    - ${jsonEncode(sampleAppRoot)}
+enabledWorkflows:
+  - workspace
+  - session
+  - launcher
+  - runtime_readonly
+  - profiling
+  - platform_bridge
+  - native_build
+adapters:
+  active:
+    nativeBuild: custom.native.build
+  providers:
+    custom.native.build:
+      kind: stdio_json
+      families:
+        - nativeBuild
+      command: ${Platform.resolvedExecutable}
+      args:
+        - run
+        - tool/fake_native_build_provider.dart
+      startupTimeoutMs: 15000
+''',
+        );
+        final client = await _TestMcpClient.start(
+          repoRoot: Directory.current.path,
+          workspaceRoot: sampleAppRoot,
+          stateDir: stateDir.path,
+          configPath: configPath,
+        );
+        addTearDown(client.close);
+
+        await _initializeClient(client);
+        await client.request('tools/call', <String, Object?>{
+          'name': 'workspace_set_root',
+          'arguments': <String, Object?>{'workspaceRoot': sampleAppRoot},
+        });
+
+        final tools = await client.request('tools/list');
+        final toolNames = (tools['tools'] as List<Object?>)
+            .cast<Map<Object?, Object?>>()
+            .map((Map<Object?, Object?> tool) => tool['name'])
+            .toSet();
+        expect(
+          toolNames,
+          containsAll(<String>[
+            'native_project_inspect',
+            'native_build_launch',
+            'native_attach_flutter_runtime',
+            'native_stop',
+          ]),
+        );
+
+        final adapterList = await client.request('tools/call', <String, Object?>{
+          'name': 'adapter_list',
+          'arguments': <String, Object?>{'family': 'nativeBuild'},
+        });
+        final adapters =
+            ((adapterList['structuredContent'] as Map<Object?, Object?>)['adapters']
+                    as List<Object?>)
+                .cast<Map<Object?, Object?>>();
+        expect(adapters.single['activeProviderId'], 'custom.native.build');
+        expect(adapters.single['supportLevel'], 'beta');
+        expect(adapters.single['healthy'], isTrue);
+
+        final inspect = await client.request('tools/call', <String, Object?>{
+          'name': 'native_project_inspect',
+          'arguments': <String, Object?>{'platform': 'ios'},
+        });
+        final inspectStructured =
+            inspect['structuredContent'] as Map<Object?, Object?>;
+        expect(inspectStructured['platform'], 'ios');
+        expect(
+          (inspectStructured['schemes'] as List<Object?>).contains('Runner'),
+          isTrue,
+        );
+
+        final launch = await client.request('tools/call', <String, Object?>{
+          'name': 'native_build_launch',
+          'arguments': <String, Object?>{'platform': 'ios'},
+        });
+        final launchStructured =
+            launch['structuredContent'] as Map<Object?, Object?>;
+        final sessionId = launchStructured['sessionId'] as String;
+        final launchSession =
+            launchStructured['session'] as Map<Object?, Object?>;
+        final launchNativeContext =
+            launchSession['nativeContext'] as Map<Object?, Object?>;
+        expect(launchNativeContext['providerId'], 'custom.native.build');
+        expect(launchNativeContext['flutterRuntimeAttached'], isFalse);
+
+        final resources = await client.request('resources/list');
+        final uris = (resources['resources'] as List<Object?>)
+            .cast<Map<Object?, Object?>>()
+            .map((Map<Object?, Object?> resource) => resource['uri'])
+            .toSet();
+        expect(uris, contains('session://$sessionId/native-summary'));
+        expect(uris, contains('log://$sessionId/native-build'));
+        expect(uris, contains('log://$sessionId/native-device'));
+
+        final nativeSummary = await client.request(
+          'resources/read',
+          <String, Object?>{'uri': 'session://$sessionId/native-summary'},
+        );
+        final nativeSummaryBody =
+            (nativeSummary['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        final nativeSummaryDecoded =
+            jsonDecode(nativeSummaryBody['text'] as String)
+                as Map<String, Object?>;
+        expect(nativeSummaryDecoded['sessionId'], sessionId);
+
+        final attachHints =
+            launchStructured['runtimeAttachHints'] as Map<Object?, Object?>;
+        final attach = await client.request('tools/call', <String, Object?>{
+          'name': 'native_attach_flutter_runtime',
+          'arguments': <String, Object?>{
+            'sessionId': sessionId,
+            'debugUrl': attachHints['debugUrl'] as String,
+            'appId': attachHints['appId'] as String,
+            'deviceId': attachHints['deviceId'] as String,
+          },
+        });
+        final attachStructured =
+            attach['structuredContent'] as Map<Object?, Object?>;
+        final attachedSession =
+            attachStructured['session'] as Map<Object?, Object?>;
+        final attachedNativeContext =
+            attachedSession['nativeContext'] as Map<Object?, Object?>;
+        expect(attachedNativeContext['flutterRuntimeAttached'], isTrue);
+
+        final appState = await client.request('tools/call', <String, Object?>{
+          'name': 'get_app_state_summary',
+          'arguments': <String, Object?>{'sessionId': sessionId},
+        });
+        final appStateStructured =
+            appState['structuredContent'] as Map<Object?, Object?>;
+        expect(appStateStructured['nativeBuildAttached'], isTrue);
+
+        final iosContext = await client.request('tools/call', <String, Object?>{
+          'name': 'ios_debug_context',
+          'arguments': <String, Object?>{'sessionId': sessionId},
+        });
+        final iosStructured =
+            iosContext['structuredContent'] as Map<Object?, Object?>;
+        final handoffResource =
+            iosStructured['resource'] as Map<Object?, Object?>;
+        expect(handoffResource['uri'], 'native-handoff://$sessionId/ios');
+
+        final handoffBundle = await client.request(
+          'resources/read',
+          <String, Object?>{'uri': 'native-handoff://$sessionId/ios'},
+        );
+        final handoffBody =
+            (handoffBundle['contents'] as List<Object?>).single
+                as Map<Object?, Object?>;
+        final handoffDecoded =
+            jsonDecode(handoffBody['text'] as String) as Map<String, Object?>;
+        expect(handoffDecoded['nativeContext'], isA<Map<String, Object?>>());
+        final evidence =
+            handoffDecoded['evidenceResources'] as List<Object?>;
+        expect(
+          evidence.any(
+            (Object? item) =>
+                (item as Map<Object?, Object?>)['uri'] ==
+                'session://$sessionId/native-summary',
+          ),
+          isTrue,
+        );
+        expect(
+          evidence.any(
+            (Object? item) =>
+                (item as Map<Object?, Object?>)['uri'] ==
+                'log://$sessionId/native-build',
+          ),
+          isTrue,
+        );
+
+        final stop = await client.request('tools/call', <String, Object?>{
+          'name': 'native_stop',
+          'arguments': <String, Object?>{'sessionId': sessionId},
+        });
+        final stopStructured =
+            stop['structuredContent'] as Map<Object?, Object?>;
+        final stoppedSession =
+            stopStructured['session'] as Map<Object?, Object?>;
+        expect(stoppedSession['state'], 'stopped');
+      },
+    );
+
+    test(
       'supports HTTP preview session lifecycle and fallback-only root flow',
       () async {
         final sandbox = await Directory.systemTemp.createTemp('flutterhelm-http');

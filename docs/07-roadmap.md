@@ -33,6 +33,7 @@ FlutterHelm は最初から全部を載せるべきではありません。
 - `0.2.0-stable` の contract version と migration notes が local で確認できる
 - `stable` harness aggregate で stable support lane を一括実行できる
 - `beta` harness aggregate で stable lane に ecosystem / interaction を加えた checks を一括実行できる
+- Sprint 16 の native build orchestration beta wave は plan として整理済み
 - support level は `workspace_show` / `compatibility_check` / `adapter_list` / `config://adapters/current` で確認できる
 
 ## Phase 0 — Foundation
@@ -202,6 +203,28 @@ FlutterHelm は最初から全部を載せるべきではありません。
 - contract バージョニングが定着
 - downgrade / fallback が十分に説明可能
 - community or internal adapter を受け入れられる構造
+
+## Phase 7 — Native Build Orchestration
+
+### 目的
+
+- native build / launch / Flutter runtime attach の beta wave を iOS-first で整理する
+
+### Deliverables
+
+- `native_build`
+- `nativeBuild`
+- `native-build` harness lane
+- `native_project_inspect`
+- `native_build_launch`
+- `native_attach_flutter_runtime`
+- `native_stop`
+
+### Exit criteria
+
+- native build launched session を Flutter runtime attach に繋げられる
+- native build / device / Flutter runtime の evidence を同じ session 文脈で読める
+- native build orchestration が beta であり、stable lane とは別であることが明確
 
 ## リリースチャネル案
 

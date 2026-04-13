@@ -1,11 +1,9 @@
 import 'dart:io';
 
 import 'package:flutterhelm/adapters/registry.dart';
-import 'package:flutterhelm/artifacts/pins.dart';
-import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/config/config.dart';
-import 'package:flutterhelm/hardening/tools.dart';
-import 'package:flutterhelm/observability/store.dart';
+import 'package:flutterhelm/server/capabilities.dart';
+import 'package:flutterhelm/server/registry.dart';
 import 'package:flutterhelm/server/support_levels.dart';
 import 'package:flutterhelm/utils/process_runner.dart';
 import 'package:path/path.dart' as p;
@@ -50,23 +48,47 @@ adapters:
       expect(customState['healthy'], isTrue);
       expect(customState['supportLevel'], SupportLevel.beta.name);
       expect(customState['includedInStableLane'], isFalse);
+    });
 
-      final compatibility = await (await _buildHardeningService(tempDir))
-          .compatibilityCheck(
-            config: config,
-            activeRoot: tempDir.path,
-            transportMode: 'stdio',
-          );
-      expect(compatibility['releaseChannel'], flutterHelmReleaseChannel);
-      final adapters = compatibility['adapters'] as Map<String, Object?>;
-      expect(adapters['deprecations'], isEmpty);
-      final providerStatesFromCompatibility =
-          adapters['providerStates'] as Map<String, Object?>;
-      final compatibilityState =
-          providerStatesFromCompatibility['custom.runtime.driver']
-              as Map<String, Object?>;
-      expect(compatibilityState['state'], 'healthy');
-      expect(compatibilityState['supportLevel'], SupportLevel.beta.name);
+    test('surfaces nativeBuild builtin visibility and capabilities', () async {
+      final config = FlutterHelmConfig.defaults();
+      final registry = AdapterRegistry(
+        config: config,
+        processRunner: const ProcessRunner(),
+      );
+
+      final nativeBuild = await registry.familyStatus('nativeBuild');
+      expect(nativeBuild.activeProviderId, 'builtin.native_build.external_process');
+      expect(nativeBuild.supportLevel, SupportLevel.beta.name);
+      expect(nativeBuild.familySupportLevel, SupportLevel.beta.name);
+      expect(nativeBuild.healthy, isFalse);
+      expect(nativeBuild.reason, contains('disabled'));
+
+      final currentResource = await registry.currentResource();
+      final providerStates =
+          currentResource['providerStates'] as Map<String, Object?>;
+      final builtinState = providerStates['builtin.native_build.external_process']
+          as Map<String, Object?>;
+      expect(builtinState['state'], 'degraded');
+      expect(builtinState['healthy'], isFalse);
+      expect(builtinState['supportLevel'], SupportLevel.beta.name);
+      expect(builtinState['includedInStableLane'], isFalse);
+
+      final capabilities = buildServerCapabilities(
+        toolRegistry: ToolRegistry(),
+        config: config,
+        transportMode: 'stdio',
+      );
+      final experimental =
+          capabilities['experimental'] as Map<String, Object?>;
+      final nativeBuildCapabilities =
+          experimental['nativeBuild'] as Map<String, Object?>;
+      expect(nativeBuildCapabilities['mode'], 'build_launch_attach');
+      expect(nativeBuildCapabilities['supportLevel'], SupportLevel.beta.name);
+      expect(nativeBuildCapabilities['defaultEnabled'], isFalse);
+      expect(nativeBuildCapabilities['supportedPlatforms'], contains('ios'));
+      expect(nativeBuildCapabilities['providerKinds'], contains('builtin'));
+      expect(nativeBuildCapabilities['providerKinds'], contains('stdio_json'));
     });
 
     test('backs off and retries stdio_json providers lazily', () async {
@@ -116,24 +138,65 @@ adapters:
       expect(third.failureCount, 2);
       expect(third.healthy, isFalse);
     });
-  });
-}
 
-Future<HardeningToolService> _buildHardeningService(Directory tempDir) async {
-  final stateDir = p.join(tempDir.path, 'state');
-  final pinStore = await ArtifactPinStore.create(stateDir: stateDir);
-  return HardeningToolService(
-    artifactStore: ArtifactStore(stateDir: stateDir),
-    pinStore: pinStore,
-    processRunner: const ProcessRunner(),
-    observability: ObservabilityStore(),
-    configRepository: ConfigRepository(
-      RuntimePaths(
-        configPath: p.join(tempDir.path, 'config.yaml'),
-        stateDir: stateDir,
-      ),
-    ),
-  );
+    test('parses nativeBuild provider families and invokes them', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'flutterhelm-native-build-provider',
+      );
+      addTearDown(() => tempDir.delete(recursive: true));
+
+      final providerScript = await _writeProviderScript(tempDir);
+      final config = FlutterHelmConfig.fromYamlText('''
+version: 1
+adapters:
+  active:
+    nativeBuild: custom.native.build
+  providers:
+    custom.native.build:
+      kind: stdio_json
+      families:
+        - nativeBuild
+      command: dart
+      args:
+        - run
+        - ${providerScript.path}
+        - healthy
+''');
+      final registry = AdapterRegistry(
+        config: config,
+        processRunner: const ProcessRunner(),
+      );
+
+      final health = await registry.familyHealth('nativeBuild');
+      expect(health['state'], 'healthy');
+      expect(health['healthy'], isTrue);
+      expect(health['supportLevel'], SupportLevel.beta.name);
+      expect(health['activeProviderId'], 'custom.native.build');
+
+      final invoke = await registry.invokeFamily(
+        family: 'nativeBuild',
+        operation: 'native_project_inspect',
+        input: <String, Object?>{'workspaceRoot': tempDir.path},
+      );
+      final invokeResult = invoke as Map<String, Object?>;
+      expect(invokeResult['family'], 'nativeBuild');
+      expect(invokeResult['operation'], 'native_project_inspect');
+      expect(
+        (invokeResult['input'] as Map<String, Object?>)['workspaceRoot'],
+        tempDir.path,
+      );
+
+      final currentResource = await registry.currentResource();
+      final providerStates =
+          currentResource['providerStates'] as Map<String, Object?>;
+      final customState = providerStates['custom.native.build']
+          as Map<String, Object?>;
+      expect(customState['state'], 'healthy');
+      expect(customState['healthy'], isTrue);
+      expect(customState['supportLevel'], SupportLevel.beta.name);
+      expect(customState['includedInStableLane'], isFalse);
+    });
+  });
 }
 
 Future<File> _writeProviderScript(
@@ -148,6 +211,40 @@ const String _providerScript = r'''
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
+Map<String, Object?> familyPayload(String family, String mode) {
+  if (family == 'nativeBuild') {
+    return <String, Object?>{
+      'healthy': mode != 'degraded',
+      'operations': <String>[
+        'native_project_inspect',
+        'native_build_launch',
+        'native_attach_flutter_runtime',
+        'native_stop',
+      ],
+      'supportedPlatforms': <String>['ios'],
+      'supportedLocatorFields': <String>[],
+      'screenshotFormats': <String>[],
+      'reason': mode == 'degraded' ? 'temporarily degraded' : null,
+      'reasons': mode == 'degraded'
+          ? <String>['temporarily degraded']
+          : <String>[],
+      'state': mode == 'degraded' ? 'degraded' : 'healthy',
+    };
+  }
+  return <String, Object?>{
+    'healthy': mode != 'degraded',
+    'operations': <String>['capture_screenshot'],
+    'supportedPlatforms': <String>['ios'],
+    'supportedLocatorFields': <String>['text'],
+    'screenshotFormats': <String>['png'],
+    'reason': mode == 'degraded' ? 'temporarily degraded' : null,
+    'reasons': mode == 'degraded'
+        ? <String>['temporarily degraded']
+        : <String>[],
+    'state': mode == 'degraded' ? 'degraded' : 'healthy',
+  };
+}
 
 Future<void> main(List<String> args) async {
   final mode = args.isNotEmpty ? args.last : 'healthy';
@@ -187,18 +284,8 @@ Future<void> main(List<String> args) async {
             'version': '1.0.0',
           },
           'families': <String, Object?>{
-            'runtimeDriver': <String, Object?>{
-              'healthy': mode != 'degraded',
-              'operations': <String>['capture_screenshot'],
-              'supportedPlatforms': <String>['ios'],
-              'supportedLocatorFields': <String>['text'],
-              'screenshotFormats': <String>['png'],
-              'reason': mode == 'degraded' ? 'temporarily degraded' : null,
-              'reasons': mode == 'degraded'
-                  ? <String>['temporarily degraded']
-                  : <String>[],
-              'state': mode == 'degraded' ? 'degraded' : 'healthy',
-            },
+            'runtimeDriver': familyPayload('runtimeDriver', mode),
+            'nativeBuild': familyPayload('nativeBuild', mode),
           },
         },
       }));
@@ -206,9 +293,15 @@ Future<void> main(List<String> args) async {
       continue;
     }
     if (method == 'provider/invoke') {
+      final params = message['params'] as Map<String, Object?>? ?? const <String, Object?>{};
       stdout.writeln(jsonEncode(<String, Object?>{
         'id': id,
-        'result': <String, Object?>{'ok': true},
+        'result': <String, Object?>{
+          'family': params['family'],
+          'operation': params['operation'],
+          'input': params['input'],
+          'ok': true,
+        },
       }));
       await stdout.flush();
     }

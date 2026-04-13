@@ -236,6 +236,20 @@ active provider と support level は次で確認します。
 - `config://adapters/current`
 - `compatibility_check`
 
+### 9.3 `native_build` (Sprint 16 planned beta)
+
+native build orchestration は次の beta wave として計画されています。  
+まだ stable lane には入っていませんが、Sprint 16 では iOS-first の build / launch / Flutter runtime attach を扱う `native_build` workflow と `nativeBuild` adapter family を追加する想定です。
+
+予定されている入口は次です。
+
+- `native_project_inspect`
+- `native_build_launch`
+- `native_attach_flutter_runtime`
+- `native_stop`
+
+導線としては、現在の `ios_debug_context` / `native_handoff_summary` で native 側へ渡す文脈を先に整え、native build orchestration が入ったら `native-build` harness lane で検証する流れを想定します。
+
 ## 10. HTTP preview はどう扱うか
 
 HTTP transport は **preview** です。  

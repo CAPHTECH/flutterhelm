@@ -134,6 +134,9 @@ class HardeningToolService {
     final runtimeDriverProvider = resolvedConfig.adapters.providerForFamily(
       'runtimeDriver',
     );
+    final nativeBuildProvider = resolvedConfig.adapters.providerForFamily(
+      'nativeBuild',
+    );
     final flutterProbe = await _probeFlutter(resolvedConfig.adapters.flutterExecutable);
     final runtimeDriverCommand =
         runtimeDriverProvider?.command ??
@@ -162,6 +165,8 @@ class HardeningToolService {
     final hasAndroidProject = activeRoot == null
         ? false
         : await Directory(p.join(activeRoot, 'android')).exists();
+    final nativeBuildHealth = await adapterRegistry.familyHealth('nativeBuild');
+    final nativeBuildHealthy = nativeBuildHealth['healthy'] as bool? ?? false;
 
     final checks = <String, Object?>{
       'flutterCli': _probeStatus(
@@ -242,6 +247,26 @@ class HardeningToolService {
           'hasAndroidProject': hasAndroidProject,
         },
       ),
+      'nativeBuild': _probeStatus(
+        supported: nativeBuildProvider != null && nativeBuildHealthy,
+        status: nativeBuildProvider == null
+            ? 'unavailable'
+            : (nativeBuildHealthy ? 'ok' : 'degraded'),
+        reason: nativeBuildProvider == null
+            ? 'No nativeBuild provider is configured.'
+            : nativeBuildHealth['reason'] as String?,
+        requirements: const <String>[
+          'Configure adapters.active.nativeBuild and a matching provider.',
+          'nativeBuild is currently beta and iOS-first.',
+        ],
+        supportLevel: SupportLevel.beta,
+        includedInStableLane: false,
+        extra: <String, Object?>{
+          'providerId': nativeBuildProvider?.id,
+          'kind': nativeBuildProvider?.kind,
+          'supportedPlatforms': const <String>['ios'],
+        },
+      ),
     };
 
     final workflows = <String, Object?>{
@@ -301,6 +326,23 @@ class HardeningToolService {
                   : (!resolvedConfig.adapters.runtimeDriverEnabled
                         ? 'runtimeDriver is disabled.'
                         : runtimeDriverProbe.reason)),
+        supportLevel: SupportLevel.beta,
+        includedInStableLane: false,
+      ),
+      'native_build': _workflowStatus(
+        configured: resolvedConfig.enabledWorkflows.contains('native_build'),
+        supported:
+            nativeBuildProvider != null &&
+            nativeBuildHealthy &&
+            Platform.isMacOS &&
+            hasIosProject,
+        reason: nativeBuildProvider == null
+            ? 'nativeBuild provider is missing.'
+            : (!Platform.isMacOS
+                  ? 'native_build is currently supported on macOS only.'
+                  : (!hasIosProject
+                        ? 'An iOS project is required for native_build.'
+                        : nativeBuildHealth['reason'] as String?)),
         supportLevel: SupportLevel.beta,
         includedInStableLane: false,
       ),

@@ -24,6 +24,14 @@ Map<String, Object?> buildServerCapabilities({
         'supportLevel': 'stable',
         'includedInStableLane': true,
       },
+      'nativeBuild': const <String, Object?>{
+        'mode': 'build_launch_attach',
+        'defaultEnabled': false,
+        'supportedPlatforms': <String>['ios'],
+        'providerKinds': <String>['builtin', 'stdio_json'],
+        'supportLevel': 'beta',
+        'includedInStableLane': false,
+      },
       'platformBridge': const <String, Object?>{
         'mode': 'handoff_only',
         'ideAutomation': false,
@@ -68,6 +76,7 @@ Map<String, Object?> buildServerCapabilities({
           'flutterCli',
           'profiling',
           'runtimeDriver',
+          'nativeBuild',
           'platformBridge',
         ],
         'customProviderKinds': <String>['stdio_json'],

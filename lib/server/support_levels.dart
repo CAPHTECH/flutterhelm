@@ -15,11 +15,13 @@ const List<String> flutterHelmBetaHarnessTags = <String>[
   ...flutterHelmStableHarnessTags,
   'ecosystem',
   'interaction',
+  'native-build',
 ];
 
 SupportLevel workflowSupportLevel(String workflow) {
   return switch (workflow) {
     'runtime_interaction' => SupportLevel.beta,
+    'native_build' => SupportLevel.beta,
     _ => SupportLevel.stable,
   };
 }
@@ -33,6 +35,7 @@ SupportLevel transportSupportLevel(String transportMode) {
 
 SupportLevel adapterFamilySupportLevel(String family) {
   return switch (family) {
+    'nativeBuild' => SupportLevel.beta,
     'runtimeDriver' => SupportLevel.beta,
     _ => SupportLevel.stable,
   };
@@ -40,6 +43,12 @@ SupportLevel adapterFamilySupportLevel(String family) {
 
 SupportLevel adapterProviderSupportLevel(AdapterProviderConfig provider) {
   if (provider.kind == 'stdio_json') {
+    return SupportLevel.beta;
+  }
+  if (provider.families.contains('nativeBuild')) {
+    return SupportLevel.beta;
+  }
+  if (provider.id == 'builtin.native_build.external_process') {
     return SupportLevel.beta;
   }
   if (provider.id == 'builtin.runtime_driver.external_process') {

@@ -258,6 +258,18 @@ native handoff resource は JSON manifest です。zip export ではなく、既
 - `partial`: native project はあるが evidence が限定的
 - `unavailable`: 対応 native project が workspace に見つからない
 
+## 7.7 native build orchestration (Sprint 16 beta, planned)
+
+Sprint 16 では native build orchestration を beta として追加する計画です。  
+この wave では、native build / device / Flutter runtime の evidence を同じ session に束ねるための resource を追加します。
+
+- `log://<session-id>/native-build`
+- `log://<session-id>/native-device`
+- `session://<session-id>/native-summary`
+
+`nativeContext` を session に追加し、native build launch と Flutter runtime attach を同じ session 文脈で参照できるようにする想定です。  
+ただし、この resources set は stable lane には含めず、native debugger の置き換えにも使いません。
+
 `config://workspace/current` は current implementation で `transportMode`, `httpPreview`, `rootsTransportSupport`, `adaptersResource`, `compatibilityResource` も返します。transport と adapter registry の詳細はそれぞれ `config://workspace/current`, `config://adapters/current`, `config://compatibility/current` で読めます。
 
 ## 8. Resource metadata

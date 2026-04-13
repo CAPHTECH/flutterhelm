@@ -10,6 +10,7 @@ import 'package:flutterhelm/config/config.dart';
 import 'package:flutterhelm/hardening/operation_coordinator.dart';
 import 'package:flutterhelm/hardening/tools.dart';
 import 'package:flutterhelm/launcher/tools.dart';
+import 'package:flutterhelm/native_build/tools.dart';
 import 'package:flutterhelm/observability/store.dart';
 import 'package:flutterhelm/platform_bridge/tools.dart';
 import 'package:flutterhelm/policies/approvals.dart';
@@ -138,6 +139,7 @@ class FlutterHelmServer {
     required this.runtimeTools,
     required this.profilingTools,
     required this.nativeBridgeTools,
+    required this.nativeBuildTools,
     required this.testTools,
     required String logLevel,
     required ServerState state,
@@ -165,6 +167,7 @@ class FlutterHelmServer {
   final RuntimeToolService runtimeTools;
   final ProfilingToolService profilingTools;
   final NativeBridgeToolService nativeBridgeTools;
+  final NativeBuildToolService nativeBuildTools;
   final TestToolService testTools;
   final String _logLevel;
 
@@ -295,6 +298,33 @@ class FlutterHelmServer {
       nativeBridgeTools: NativeBridgeToolService(
         sessionStore: sessionStore,
         artifactStore: artifactStore,
+      ),
+      nativeBuildTools: NativeBuildToolService(
+        sessionStore: sessionStore,
+        artifactStore: artifactStore,
+        familyStatus: adapterRegistry.familyHealth,
+        invokeFamily: ({
+          required String family,
+          required String operation,
+          required Map<String, Object?> input,
+        }) async {
+          final payload = await adapterRegistry.invokeFamily(
+            family: family,
+            operation: operation,
+            input: input,
+          );
+          if (payload is Map<String, Object?>) {
+            return payload;
+          }
+          if (payload is Map) {
+            return payload.map<String, Object?>(
+              (Object? key, Object? value) =>
+                  MapEntry<String, Object?>(key.toString(), value),
+            );
+          }
+          return <String, Object?>{};
+        },
+        appStateBuilder: runtimeInteractionTools.appStateForSession,
       ),
       testTools: TestToolService(
         processRunner: processRunner,
@@ -1007,7 +1037,7 @@ class FlutterHelmServer {
         'version': flutterHelmVersion,
       },
       'instructions':
-          'Phase 6 hardening server: use tools for workspace/package/run/test orchestration, vm_service-backed profiling, handoff-only native bridge generation, screenshot capture, opt-in runtime interaction, explicit artifact pinning, and compatibility preflight; use resources for logs, widget trees, runtime errors, reports, coverage, session health, profiling captures, screenshots, native handoff bundles, pinned artifact index, and compatibility state.',
+          'Stable stdio-first server: use tools for workspace/package/run/test orchestration, vm_service-backed profiling, handoff-only native bridge generation, beta native build orchestration, screenshot capture, opt-in runtime interaction, explicit artifact pinning, and compatibility preflight; use resources for logs, widget trees, runtime errors, reports, coverage, session health, native summaries, profiling captures, screenshots, native handoff bundles, pinned artifact index, and compatibility state.',
     };
   }
 
@@ -1080,6 +1110,12 @@ class FlutterHelmServer {
             'profilingOwnershipPolicy': 'owned_only',
             'platformBridgeMode': 'handoff_only',
             'platformBridgeSupportedPlatforms': const <String>['ios', 'android'],
+            'nativeBuildDefaultEnabled': false,
+            'nativeBuildSupportedPlatforms': const <String>['ios'],
+            'nativeBuildSupport': supportLevelMetadata(
+              supportLevel: SupportLevel.beta,
+              includedInStableLane: false,
+            ),
             'runtimeInteractionBackend':
                 config.adapters.providerForFamily('runtimeDriver')?.kind ??
                 'builtin',
@@ -1641,6 +1677,98 @@ class FlutterHelmServer {
                 title: 'Session summary',
               ),
             ],
+          );
+        case 'native_project_inspect':
+          currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            context,
+            emit,
+            arguments['workspaceRoot'] as String?,
+          );
+          final nativeInspection = await nativeBuildTools.nativeProjectInspect(
+            workspaceRoot: currentWorkspaceRoot,
+            platform: _requiredString(arguments['platform'], 'platform'),
+          );
+          return _toolSuccessExecution(
+            definition: definition,
+            summary:
+                'Native project inspection completed for ${nativeInspection['platform']}.',
+            structuredContent: nativeInspection,
+            workspaceRoot: currentWorkspaceRoot,
+          );
+        case 'native_build_launch':
+          currentWorkspaceRoot = await _resolveWorkspaceRoot(
+            context,
+            emit,
+            arguments['workspaceRoot'] as String?,
+          );
+          final nativeLaunch = await _withWorkspaceLock(
+            toolName: definition.name,
+            workspaceRoot: currentWorkspaceRoot,
+            action: () => nativeBuildTools.nativeBuildLaunch(
+              workspaceRoot: currentWorkspaceRoot!,
+              platform: _requiredString(arguments['platform'], 'platform'),
+              target:
+                  (arguments['target'] as String?) ?? config.defaults.target,
+              mode: (arguments['mode'] as String?) ?? config.defaults.mode,
+              scheme: arguments['scheme'] as String?,
+              configuration: arguments['configuration'] as String?,
+              destination: arguments['destination'] as String?,
+              attachFlutterRuntime:
+                  arguments['attachFlutterRuntime'] as bool? ?? false,
+            ),
+          );
+          currentSessionId = nativeLaunch['sessionId'] as String?;
+          return _toolSuccessExecution(
+            definition: definition,
+            summary:
+                'Native build launch created session ${nativeLaunch['sessionId']}.',
+            structuredContent: nativeLaunch,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(nativeLaunch['resources']),
+          );
+        case 'native_attach_flutter_runtime':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          final nativeAttached = await _withSessionLock(
+            toolName: definition.name,
+            sessionId: currentSessionId,
+            action: () => nativeBuildTools.nativeAttachFlutterRuntime(
+              sessionId: currentSessionId!,
+              debugUrl: arguments['debugUrl'] as String?,
+              appId: arguments['appId'] as String?,
+              deviceId: arguments['deviceId'] as String?,
+            ),
+          );
+          currentWorkspaceRoot =
+              sessionStore.getById(currentSessionId, touch: false)?.workspaceRoot;
+          return _toolSuccessExecution(
+            definition: definition,
+            summary:
+                'Flutter runtime attached to native session $currentSessionId.',
+            structuredContent: nativeAttached,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(nativeAttached['resources']),
+          );
+        case 'native_stop':
+          currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
+          final nativeStopped = await _withSessionLock(
+            toolName: definition.name,
+            sessionId: currentSessionId,
+            action: () => nativeBuildTools.nativeStop(
+              sessionId: currentSessionId!,
+            ),
+          );
+          currentWorkspaceRoot =
+              (nativeStopped['session'] as Map<Object?, Object?>)['workspaceRoot']
+                  as String?;
+          return _toolSuccessExecution(
+            definition: definition,
+            summary: 'Native session $currentSessionId stopped.',
+            structuredContent: nativeStopped,
+            workspaceRoot: currentWorkspaceRoot,
+            sessionId: currentSessionId,
+            resourceLinks: _resourceLinksFromPayload(nativeStopped['resources']),
           );
         case 'get_logs':
           currentSessionId = _requiredString(arguments['sessionId'], 'sessionId');
@@ -2624,8 +2752,8 @@ String _requiredString(Object? value, String fieldName) {
 
 String? _sessionIdFromUri(String uri) {
   for (final pattern in <RegExp>[
-    RegExp(r'^session://([^/]+)/(?:summary|health)$'),
-    RegExp(r'^log://([^/]+)/(?:stdout|stderr)$'),
+    RegExp(r'^session://([^/]+)/(?:summary|health|native-summary)$'),
+    RegExp(r'^log://([^/]+)/(?:stdout|stderr|native-build|native-device)$'),
     RegExp(r'^runtime-errors://([^/]+)/current$'),
     RegExp(r'^widget-tree://([^/]+)/current(?:\?.*)?$'),
     RegExp(r'^app-state://([^/]+)/summary$'),

@@ -447,6 +447,18 @@ Phase 6 の Sprint 12 ではさらに以下を追加します。
 - stable migration notes
 - `0.2.0-stable` cut as the default public contract
 
+### Sprint 16
+
+- `native_build` workflow
+- `nativeBuild` adapter family
+- `native-build` harness lane
+- `native_project_inspect`
+- `native_build_launch`
+- `native_attach_flutter_runtime`
+- `native_stop`
+- iOS-first native build / launch / runtime attach bridge
+- native build / device / summary resource surfaces
+
 ## 6. Test strategy
 
 ## 6.1 Unit tests

@@ -134,6 +134,9 @@ class RuntimeInteractionToolService {
       'nativeBridgeAvailablePlatforms': detectNativeBridgePlatformsSync(
         session.workspaceRoot,
       ),
+      if (session.nativeContext != null) 'nativeContext': session.nativeContext!.toJson(),
+      'nativeBuildAttached': session.nativeContext != null,
+      'nativeLaunchStatus': session.nativeContext?.launchStatus,
       'vmService': <String, Object?>{
         'available': session.vmServiceAvailable,
         'maskedUri': session.vmServiceMaskedUri,
@@ -163,6 +166,13 @@ class RuntimeInteractionToolService {
     if (session.ownership != SessionOwnership.owned) {
       issues.add('profiling requires an owned session');
       guidance.add('Use run_app to create an owned session instead of attach_app.');
+    }
+    if (session.nativeContext != null &&
+        session.nativeContext!.flutterRuntimeAttached != true) {
+      issues.add('native-launched session is not yet Flutter-attached');
+      guidance.add(
+        'Use native_attach_flutter_runtime before relying on Flutter runtime inspection tools for a native-launched session.',
+      );
     }
     if (session.state != SessionState.running) {
       issues.add('session is not running');
@@ -206,6 +216,9 @@ class RuntimeInteractionToolService {
       'dtdAvailable': session.dtdAvailable,
       'backend': 'vm_service',
       'profileActive': session.profileActive,
+      if (session.nativeContext != null) 'nativeContext': session.nativeContext!.toJson(),
+      'nativeBuildAttached': session.nativeContext != null,
+      'nativeLaunchStatus': session.nativeContext?.launchStatus,
       ...status.toJson(),
       'hotReloadAvailable': _hotOpAvailable(session),
       'hotRestartAvailable': _hotOpAvailable(session),
@@ -425,7 +438,8 @@ class RuntimeInteractionToolService {
         !session.stale &&
         session.state == SessionState.running &&
         session.appId != null &&
-        handle?.process != null;
+        handle?.process != null &&
+        (handle?.supportsHotOperations ?? false);
   }
 
   SessionRecord _requireLiveSession(String sessionId) {

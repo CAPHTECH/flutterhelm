@@ -179,6 +179,7 @@ class AdapterRegistry {
     'profiling',
     'runtimeDriver',
     'platformBridge',
+    'nativeBuild',
   ];
 
   Future<RuntimeDriverAdapter> runtimeDriverAdapter() async {
@@ -228,6 +229,31 @@ class AdapterRegistry {
       results.add((await familyStatus(entry)).toJson());
     }
     return results;
+  }
+
+  Future<Map<String, Object?>> familyHealth(String family) async {
+    return (await familyStatus(family)).toJson();
+  }
+
+  Future<Object?> invokeFamily({
+    required String family,
+    required String operation,
+    required Map<String, Object?> input,
+  }) async {
+    final provider = config.adapters.providerForFamily(family);
+    if (provider == null) {
+      throw StateError('No active provider is configured for family $family.');
+    }
+    if (provider.kind != 'stdio_json') {
+      throw StateError(
+        'Provider ${provider.id} does not expose invokeFamily().',
+      );
+    }
+    return _providerClient(provider).invoke(
+      family: family,
+      operation: operation,
+      input: input,
+    );
   }
 
   Future<Map<String, Object?>> currentResource() async {
@@ -330,6 +356,36 @@ class AdapterRegistry {
         reasons: <String>['Configured provider $providerId was not found.'],
         failureCount: 0,
         reason: 'Configured provider $providerId was not found.',
+      );
+    }
+    if (family == 'nativeBuild' && provider.kind != 'stdio_json') {
+      final enabled = provider.options['enabled'] as bool? ?? false;
+      final reason = enabled
+          ? null
+          : 'Native build provider is disabled in the current config.';
+      return AdapterFamilyStatus(
+        family: family,
+        activeProviderId: providerId,
+        kind: provider.kind,
+        builtin: provider.builtin,
+        healthy: enabled,
+        operations: const <String>[],
+        supportLevel: adapterProviderSupportLevel(provider).name,
+        familySupportLevel: adapterFamilySupportLevel(family).name,
+        activeProviderSupportLevel: adapterProviderSupportLevel(provider).name,
+        includedInStableLane: adapterFamilyIncludedInStableLane(
+          family,
+          provider,
+        ),
+        state: enabled ? 'healthy' : 'degraded',
+        reasons: <String>[if (reason != null) reason],
+        failureCount: 0,
+        reason: reason,
+        providerInfo: <String, Object?>{
+          'enabled': enabled,
+          'kind': provider.kind,
+          'builtin': provider.builtin,
+        },
       );
     }
     if (!provider.families.contains(family)) {
@@ -450,6 +506,7 @@ class AdapterRegistry {
         providerId: provider.id,
         command: provider.command ?? '',
         args: provider.args,
+        families: provider.families,
         startupTimeout: Duration(
           milliseconds: provider.startupTimeoutMs > 0
               ? provider.startupTimeoutMs
@@ -470,11 +527,16 @@ class AdapterRegistry {
       };
     }
 
-    if (provider.id == 'builtin.runtime_driver.external_process') {
+    if (provider.id == 'builtin.runtime_driver.external_process' ||
+        provider.id == 'builtin.native_build.external_process' ||
+        provider.families.contains('nativeBuild')) {
       final enabled = provider.options['enabled'] as bool? ?? false;
       final reason = enabled
           ? null
-          : 'Runtime driver is disabled in the current config.';
+          : (provider.families.contains('nativeBuild') ||
+                  provider.id == 'builtin.native_build.external_process'
+              ? 'Native build provider is disabled in the current config.'
+              : 'Runtime driver is disabled in the current config.');
       return <String, Object?>{
         'state': enabled ? 'healthy' : 'degraded',
         'healthy': enabled,
@@ -514,6 +576,7 @@ class AdapterRegistry {
       'profiling' => 'profiling',
       'runtimeDriver' => 'runtime_interaction',
       'platformBridge' => 'platform_bridge',
+      'nativeBuild' => 'native_build',
       _ => family,
     };
   }
@@ -938,6 +1001,7 @@ class _StdioJsonProviderClient {
     required this.providerId,
     required this.command,
     required this.args,
+    required this.families,
     required this.startupTimeout,
     this.observability,
   });
@@ -945,6 +1009,7 @@ class _StdioJsonProviderClient {
   final String providerId;
   final String command;
   final List<String> args;
+  final List<String> families;
   final Duration startupTimeout;
   final ObservabilityStore? observability;
   _JsonRpcConnection? _connection;
@@ -1008,18 +1073,7 @@ class _StdioJsonProviderClient {
     if (blocked != null) {
       return _healthResponse(
         snapshot: blocked,
-        families: <String, Object?>{
-          'runtimeDriver': <String, Object?>{
-            'healthy': false,
-            'operations': const <String>[],
-            'supportedPlatforms': const <String>[],
-            'supportedLocatorFields': const <String>[],
-            'screenshotFormats': const <String>[],
-            'reasons': blocked.reasons,
-            'reason': blocked.reasons.isNotEmpty ? blocked.reasons.first : null,
-            'state': blocked.state.name,
-          },
-        },
+        families: _familyHealthMap(blocked),
       );
     }
 
@@ -1031,16 +1085,28 @@ class _StdioJsonProviderClient {
         const <String, Object?>{},
         timeoutOverride: startupTimeout,
       );
-      final familyPayload = _coerceMap(
-        _coerceMap(payload['families'])['runtimeDriver'],
-      );
+      final familiesPayload = _coerceMap(payload['families']);
+      final familyPayloads = <Map<String, Object?>>[
+        for (final family in families) _coerceMap(familiesPayload[family]),
+      ];
       final providerInfo = _coerceMap(payload['providerInfo']);
-      final healthy = familyPayload['healthy'] as bool? ?? false;
-      final reason = familyPayload['reason'] as String? ??
-          payload['reason'] as String?;
+      final healthy = familyPayloads.isEmpty
+          ? (payload['healthy'] as bool? ?? false)
+          : familyPayloads.every((Map<String, Object?> familyPayload) {
+              return familyPayload['healthy'] as bool? ?? false;
+            });
+      final primaryReason = familyPayloads
+          .map((Map<String, Object?> familyPayload) => familyPayload['reason'])
+          .whereType<String>()
+          .firstWhere(
+            (_) => true,
+            orElse: () => payload['reason'] as String? ?? '',
+          );
+      final reason = primaryReason.isEmpty ? null : primaryReason;
       final reasons = <String>[
         ..._coerceStringList(payload['reasons']),
-        ..._coerceStringList(familyPayload['reasons']),
+        for (final familyPayload in familyPayloads)
+          ..._coerceStringList(familyPayload['reasons']),
         if (reason != null) reason,
       ];
       final state = healthy
@@ -1087,22 +1153,27 @@ class _StdioJsonProviderClient {
       );
       return _healthResponse(
         snapshot: snapshot,
-        families: <String, Object?>{
-          'runtimeDriver': <String, Object?>{
-            'healthy': false,
-            'operations': const <String>[],
-            'supportedPlatforms': const <String>[],
-            'supportedLocatorFields': const <String>[],
-            'screenshotFormats': const <String>[],
-            'reasons': snapshot.reasons,
-            'reason': snapshot.reasons.isNotEmpty
-                ? snapshot.reasons.first
-                : snapshot.state.name,
-            'state': snapshot.state.name,
-          },
-        },
+        families: _familyHealthMap(snapshot),
       );
     }
+  }
+
+  Map<String, Object?> _familyHealthMap(_ProviderLifecycleSnapshot snapshot) {
+    return <String, Object?>{
+      for (final family in families)
+        family: <String, Object?>{
+          'healthy': false,
+          'operations': const <String>[],
+          'supportedPlatforms': const <String>[],
+          'supportedLocatorFields': const <String>[],
+          'screenshotFormats': const <String>[],
+          'reasons': snapshot.reasons,
+          'reason': snapshot.reasons.isNotEmpty
+              ? snapshot.reasons.first
+              : snapshot.state.name,
+          'state': snapshot.state.name,
+        },
+    };
   }
 
   Future<_JsonRpcConnection> _startConnection() async {

@@ -1,0 +1,15 @@
+{
+  "id": "native-build-docs",
+  "mode": "software",
+  "tags": ["native-build"],
+  "input": {
+    "checks": ["phase16-native-build-docs"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": [
+      "check:phase16-native-build-docs:ok",
+      "summary:native-build-docs"
+    ]
+  }
+}

@@ -288,6 +288,8 @@ class LauncherToolService {
         stdoutPath: '',
         stderrPath: '',
         machinePath: '',
+        managedAppProcess: false,
+        supportsHotOperations: false,
         vmServiceUri: rawVmServiceUri,
         dtdUri: rawDtdUri,
       ),
@@ -324,7 +326,7 @@ class LauncherToolService {
       );
     }
     final process = handle.process;
-    if (process == null) {
+    if (process == null || !handle.managedAppProcess) {
       throw FlutterHelmToolError(
         code: 'SESSION_NOT_RUNNING',
         category: 'runtime',
@@ -427,7 +429,10 @@ class LauncherToolService {
       action: action,
     );
     final handle = sessionStore.liveHandle(sessionId);
-    if (handle == null || handle.process == null || session.appId == null) {
+    if (handle == null ||
+        handle.process == null ||
+        !handle.supportsHotOperations ||
+        session.appId == null) {
       throw FlutterHelmToolError(
         code: code,
         category: 'runtime',
@@ -447,7 +452,10 @@ class LauncherToolService {
     required String reason,
   }) async {
     final handle = sessionStore.liveHandle(session.sessionId);
-    if (handle == null || handle.process == null || session.appId == null) {
+    if (handle == null ||
+        handle.process == null ||
+        !handle.supportsHotOperations ||
+        session.appId == null) {
       throw FlutterHelmToolError(
         code: action == 'hot_reload' ? 'HOT_RELOAD_UNAVAILABLE' : 'HOT_RESTART_UNAVAILABLE',
         category: 'runtime',

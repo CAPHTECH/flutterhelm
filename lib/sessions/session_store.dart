@@ -13,6 +13,8 @@ class LiveSessionHandle {
     required this.stdoutPath,
     required this.stderrPath,
     required this.machinePath,
+    this.managedAppProcess = true,
+    this.supportsHotOperations = true,
     this.vmServiceUri,
     this.dtdUri,
     this.cpuProfileStartMicros,
@@ -23,6 +25,8 @@ class LiveSessionHandle {
   final String stdoutPath;
   final String stderrPath;
   final String machinePath;
+  final bool managedAppProcess;
+  final bool supportsHotOperations;
   String? vmServiceUri;
   String? dtdUri;
   int? cpuProfileStartMicros;
@@ -167,6 +171,10 @@ class SessionStore {
         stale: true,
         profileActive: false,
         lastSeenAt: DateTime.now().toUtc(),
+        nativeContext: session.nativeContext?.copyWith(
+          launchStatus: 'stale',
+          flutterRuntimeAttached: false,
+        ),
       );
     }
     return session;
@@ -317,6 +325,96 @@ class SessionStore {
       vmServiceAvailable: vmServiceAvailable,
       dtdAvailable: dtdAvailable,
     );
+  }
+
+  SessionRecord createNativeOwnedSession({
+    required String workspaceRoot,
+    required String platform,
+    required String? deviceId,
+    required String target,
+    required String mode,
+    required String? flavor,
+    required NativeContext nativeContext,
+    int? pid,
+  }) {
+    final session = createContextSession(
+      workspaceRoot: workspaceRoot,
+      target: target,
+      mode: mode,
+      flavor: flavor,
+    );
+    final updated = session.copyWith(
+      ownership: SessionOwnership.owned,
+      platform: platform,
+      deviceId: deviceId,
+      state: SessionState.running,
+      stale: false,
+      pid: pid,
+      nativeContext: nativeContext,
+      lastSeenAt: DateTime.now().toUtc(),
+      lastExitAt: null,
+      lastExitCode: null,
+    );
+    _sessions[session.sessionId] = updated;
+    observability?.recordSessionLifecycle('native_owned_running');
+    unawaited(_persist());
+    return updated;
+  }
+
+  SessionRecord updateNativeContext(
+    String sessionId,
+    NativeContext nativeContext,
+  ) {
+    final current = requireById(sessionId, touch: false);
+    final updated = current.copyWith(
+      nativeContext: nativeContext,
+      lastSeenAt: DateTime.now().toUtc(),
+    );
+    _sessions[sessionId] = updated;
+    observability?.recordSessionLifecycle('native_context_updated');
+    unawaited(_persist());
+    return updated;
+  }
+
+  SessionRecord attachFlutterRuntimeToSession({
+    required String sessionId,
+    required String? platform,
+    required String? deviceId,
+    required int? pid,
+    required String? appId,
+    required bool vmServiceAvailable,
+    required String? vmServiceMaskedUri,
+    required bool dtdAvailable,
+    required String? dtdMaskedUri,
+  }) {
+    final current = requireById(sessionId, touch: false);
+    final updated = current.copyWith(
+      ownership: SessionOwnership.owned,
+      platform: platform ?? current.platform,
+      deviceId: deviceId ?? current.deviceId,
+      state: SessionState.running,
+      stale: false,
+      pid: pid ?? current.pid,
+      appId: appId ?? current.appId,
+      vmServiceAvailable: vmServiceAvailable,
+      vmServiceMaskedUri: vmServiceMaskedUri,
+      dtdAvailable: dtdAvailable,
+      dtdMaskedUri: dtdMaskedUri,
+      nativeContext: current.nativeContext?.copyWith(
+        flutterRuntimeAttached: vmServiceAvailable,
+        nativeAppId: appId ?? current.nativeContext?.nativeAppId,
+        launchStatus: vmServiceAvailable
+            ? 'flutter_attached'
+            : current.nativeContext?.launchStatus ?? 'launched',
+      ),
+      lastSeenAt: DateTime.now().toUtc(),
+      lastExitAt: null,
+      lastExitCode: null,
+    );
+    _sessions[sessionId] = updated;
+    observability?.recordSessionLifecycle('native_flutter_attached');
+    unawaited(_persist());
+    return updated;
   }
 
   List<SessionRecord> listActiveSessions() {

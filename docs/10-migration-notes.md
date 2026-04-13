@@ -43,4 +43,20 @@ Recommended superset validation command:
 mise exec -- pnpm -C harness beta
 ```
 
-`stable` runs the supported stable lane. `beta` adds `ecosystem` and `interaction` coverage on top of that lane.
+`stable` runs the supported stable lane. `beta` adds `ecosystem`, `interaction`, and the planned `native-build` lane on top of that lane.
+
+## 6. Sprint 16 beta wave
+
+Sprint 16 では native build orchestration を beta として追加する計画です。
+
+- `native_build` is beta
+- adapter family は `nativeBuild`
+- harness lane は `native-build`
+- scope は iOS-first の build / launch / Flutter runtime attach
+- stable lane には含めない
+
+Recommended native build validation command:
+
+```bash
+mise exec -- pnpm -C harness native-build
+```

@@ -44,7 +44,8 @@ type CheckName =
   | "phase6-hardening-docs"
   | "phase6-hardening-flow"
   | "phase6-ecosystem-docs"
-  | "phase6-ecosystem-flow";
+  | "phase6-ecosystem-flow"
+  | "phase16-native-build-docs";
 
 interface ContractCaseInput {
   checks?: CheckName[];
@@ -1857,6 +1858,7 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
       "`FLUTTERHELM_PROFILE`",
       "pnpm -C harness stable",
       "pnpm -C harness beta",
+      "pnpm -C harness native-build",
     ],
     "README hardening core",
   );
@@ -1892,6 +1894,7 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
     "profiling",
     "bridge",
     "interaction",
+    "native-build",
   ]) {
     if (!betaScript.includes(expected)) {
       throw new Error(`harness beta script is missing ${expected}: ${betaScript}`);
@@ -1926,6 +1929,8 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
       "`artifact_pin_list`",
       "`compatibility_check`",
       "config profile overlay",
+      "Sprint 16",
+      "native-build",
       "### Sprint 13",
       "### Sprint 14",
       "### Sprint 15",
@@ -2519,6 +2524,110 @@ adapters:
   }
 }
 
+async function checkPhase16NativeBuildDocs(repoRoot: string): Promise<void> {
+  await checkRequiredStrings(
+    repoRoot,
+    "README.md",
+    [
+      "Sprint 16 では native build orchestration の beta wave",
+      "`native_build` workflow",
+      "`nativeBuild` adapter family",
+      "`native-build` harness lane",
+      "pnpm -C harness native-build",
+    ],
+    "README native build docs",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/04-mcp-contract.md",
+    [
+      "Sprint 16 beta: native build orchestration",
+      "`native_build`",
+      "`nativeBuild`",
+      "`native-build`",
+      "iOS-first",
+    ],
+    "MCP contract native build docs",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/05-session-and-resources.md",
+    [
+      "native build orchestration (Sprint 16 beta, planned)",
+      "log://<session-id>/native-build",
+      "log://<session-id>/native-device",
+      "session://<session-id>/native-summary",
+      "`nativeContext`",
+    ],
+    "Session/resource native build docs",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/07-roadmap.md",
+    [
+      "Phase 7 — Native Build Orchestration",
+      "Sprint 16",
+      "`native_build`",
+      "`nativeBuild`",
+      "`native-build`",
+    ],
+    "Roadmap native build docs",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/09-implementation-plan.md",
+    [
+      "### Sprint 16",
+      "`native_build` workflow",
+      "`nativeBuild` adapter family",
+      "`native-build` harness lane",
+    ],
+    "Implementation plan native build docs",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/10-migration-notes.md",
+    [
+      "Sprint 16 beta wave",
+      "`native_build` is beta",
+      "`nativeBuild`",
+      "`native-build`",
+    ],
+    "Migration notes native build docs",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/11-user-guide.md",
+    [
+      "Sprint 16 planned beta",
+      "`native_build` workflow",
+      "`nativeBuild` adapter family",
+      "`native-build` harness lane",
+    ],
+    "User guide native build docs",
+  );
+
+  const harnessPackage = JSON.parse(await readRepoText(repoRoot, "harness/package.json")) as {
+    scripts?: Record<string, string>;
+  };
+  const betaScript = harnessPackage.scripts?.beta;
+  const nativeBuildScript = harnessPackage.scripts?.["native-build"];
+  if (!betaScript) {
+    throw new Error("harness/package.json is missing beta script");
+  }
+  if (!nativeBuildScript) {
+    throw new Error("harness/package.json is missing native-build script");
+  }
+  for (const expected of ["build", "validate", "run -- --tag native-build"]) {
+    if (!nativeBuildScript.includes(expected)) {
+      throw new Error(`harness native-build script is missing ${expected}: ${nativeBuildScript}`);
+    }
+  }
+  if (!betaScript.includes("native-build")) {
+    throw new Error(`harness beta script is missing native-build: ${betaScript}`);
+  }
+}
+
 async function checkMkDocsBuild(repoRoot: string, harnessRoot: string): Promise<void> {
   const docsPython = resolveDocsPython(harnessRoot);
   if (!(await pathExists(docsPython))) {
@@ -2924,6 +3033,7 @@ const CHECKS: Record<CheckName, (repoRoot: string, harnessRoot: string) => Promi
   "phase6-hardening-flow": (repoRoot) => checkPhase6HardeningFlow(repoRoot),
   "phase6-ecosystem-docs": (repoRoot) => checkPhase6EcosystemDocs(repoRoot),
   "phase6-ecosystem-flow": (repoRoot) => checkPhase6EcosystemFlow(repoRoot),
+  "phase16-native-build-docs": (repoRoot) => checkPhase16NativeBuildDocs(repoRoot),
 };
 
 async function main(): Promise<void> {

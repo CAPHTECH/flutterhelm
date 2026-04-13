@@ -146,6 +146,7 @@ class NativeBridgeToolService {
       'status': status,
       'workspaceRoot': workspaceRoot,
       'session': session.toSummaryJson(),
+      if (session.nativeContext != null) 'nativeContext': session.nativeContext!.toJson(),
       'summary': <String, Object?>{
         'sessionState': session.state.wireName,
         'ownership': session.ownership.wireName,
@@ -154,6 +155,7 @@ class NativeBridgeToolService {
         'openPathCount': openPaths.length,
         'evidenceCount': evidenceResources.length,
         'hypothesisCount': hypotheses.length,
+        'nativeLaunchPresent': session.nativeContext != null,
       },
       'openPaths': openPaths
           .map((NativeBridgePathHint hint) => hint.toJson())
@@ -238,6 +240,11 @@ class NativeBridgeToolService {
     if (session.state == SessionState.failed) {
       hypotheses.add(
         'The Flutter session failed before or during runtime; inspect startup stderr and machine logs before debugging natively.',
+      );
+    }
+    if (session.nativeContext != null) {
+      hypotheses.add(
+        'A native build/launch context is already associated with this session; correlate native-build and native-device logs with Flutter runtime evidence before reproducing in the IDE.',
       );
     }
     if (session.stale) {
