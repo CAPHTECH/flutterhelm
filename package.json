@@ -1,0 +1,40 @@
+{
+  "name": "@caphtech/flutterhelm-mcp",
+  "version": "0.2.0",
+  "description": "npx wrapper for the FlutterHelm MCP server",
+  "license": "MIT",
+  "homepage": "https://github.com/CAPHTECH/flutterhelm",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CAPHTECH/flutterhelm.git"
+  },
+  "bugs": {
+    "url": "https://github.com/CAPHTECH/flutterhelm/issues"
+  },
+  "keywords": [
+    "mcp",
+    "flutter",
+    "dart",
+    "agent",
+    "openai"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "flutterhelm-mcp": "tool/npm/flutterhelm-mcp.cjs"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "bin/flutterhelm.dart",
+    "lib/",
+    "pubspec.yaml",
+    "pubspec.lock",
+    "tool/npm/flutterhelm-mcp.cjs"
+  ],
+  "scripts": {
+    "wrapper:help": "node tool/npm/flutterhelm-mcp.cjs --help",
+    "pack:dry-run": "npm pack --dry-run"
+  }
+}

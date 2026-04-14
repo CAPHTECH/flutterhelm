@@ -24,6 +24,7 @@ It adds **session management, safety controls, artifact/resource handling, compa
 
 ## Start Here
 
+- Fastest install path: use the `npx` wrapper shown below and skip repository checkout
 - English overview: [docs/en/index.md](docs/en/index.md)
 - English user guide: [docs/en/user-guide.md](docs/en/user-guide.md)
 - English troubleshooting: [docs/en/troubleshooting.md](docs/en/troubleshooting.md)
@@ -124,8 +125,30 @@ enabledWorkflows:
 {
   "mcpServers": {
     "flutterhelm": {
-      "command": "flutterhelm",
-      "args": ["serve"]
+      "command": "npx",
+      "args": ["-y", "github:CAPHTECH/flutterhelm", "serve"]
+    }
+  }
+}
+```
+
+This works without cloning the repository, as long as `npx` and `dart` or `flutter` are available on PATH.
+
+If you already cloned the repository and want the local source path instead:
+
+```json
+{
+  "mcpServers": {
+    "flutterhelm": {
+      "command": "mise",
+      "args": [
+        "exec",
+        "--",
+        "dart",
+        "run",
+        "bin/flutterhelm.dart",
+        "serve"
+      ]
     }
   }
 }

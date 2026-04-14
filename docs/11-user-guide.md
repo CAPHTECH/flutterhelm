@@ -49,7 +49,35 @@ mise exec -- dart test
 mise exec -- dart run bin/flutterhelm.dart serve
 ```
 
+checkout せずに導入したいなら、MCP client 側で `npx` wrapper を使います。
+
+```json
+{
+  "mcpServers": {
+    "flutterhelm": {
+      "command": "npx",
+      "args": ["-y", "github:CAPHTECH/flutterhelm", "serve"]
+    }
+  }
+}
+```
+
+この wrapper は GitHub 上の repo package をそのまま使い、内部で `dart` または `flutter` から FlutterHelm を起動します。
+
 ### 3.3 MCP client 設定の最小例
+
+```json
+{
+  "mcpServers": {
+    "flutterhelm": {
+      "command": "npx",
+      "args": ["-y", "github:CAPHTECH/flutterhelm", "serve"]
+    }
+  }
+}
+```
+
+repo を clone 済みなら、ローカル source 直起動は次です。
 
 ```json
 {
