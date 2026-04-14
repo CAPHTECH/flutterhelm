@@ -2,6 +2,12 @@
 
 FlutterHelm は、**Flutter 開発向けの agent-safe な orchestration layer / MCP server** です。
 
+English docs: [Overview](docs/en/index.md) | [User Guide](docs/en/user-guide.md) | [Troubleshooting](docs/en/troubleshooting.md)  
+日本語 docs: [概要](docs/ja/index.md) | [ユーザーガイド](docs/11-user-guide.md) | [トラブルシューティング](docs/12-troubleshooting.md)
+
+FlutterHelm is an agent-safe orchestration layer / MCP server for Flutter development.  
+It composes the official Dart and Flutter MCP server, `flutter` CLI, `vm_service`, profiling, native handoff, and optional runtime drivers behind a consistent session/resource/safety contract.
+
 狙いは、Flutter 開発で散在している以下の面を、AI エージェントにとって扱いやすい一貫した面へ整理することです。
 
 - 公式 **Dart and Flutter MCP server**
@@ -31,6 +37,8 @@ FlutterHelm は、これらを置き換えるものではありません。
 - 日常的な使い方と最短セットアップ: [User Guide](docs/11-user-guide.md)
 - 失敗モードと対処: [Troubleshooting](docs/12-troubleshooting.md)
 - stable / beta / preview の境界と移行: [Migration Notes](docs/10-migration-notes.md)
+- English documentation entrypoint: [docs/en/index.md](docs/en/index.md)
+- 日本語ドキュメント入口: [docs/ja/index.md](docs/ja/index.md)
 - contribution policy: [CONTRIBUTING.md](CONTRIBUTING.md)
 - security reporting: [SECURITY.md](SECURITY.md)
 

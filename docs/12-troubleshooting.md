@@ -1,5 +1,7 @@
 # Troubleshooting
 
+English version: [docs/en/troubleshooting.md](en/troubleshooting.md)
+
 このページは、FlutterHelm の **日常運用で遭遇しやすい失敗モード** をまとめたものです。  
 まずは error message そのものより、`session://.../health` と `config://...` の read-only resource を確認するのが基本です。
 

@@ -1,5 +1,7 @@
 # User Guide
 
+English version: [docs/en/user-guide.md](en/user-guide.md)
+
 このページは、FlutterHelm を **実際に使い始める人向け** の入口です。  
 内部設計や full contract を読む前に、まず **何が stable で、どう起動して、どの順で使うか** を掴めるようにしています。
 

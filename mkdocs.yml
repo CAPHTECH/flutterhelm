@@ -4,10 +4,17 @@ theme:
   name: mkdocs
 nav:
   - Start Here:
-      - Overview: index.md
-      - User Guide: 11-user-guide.md
-      - Troubleshooting: 12-troubleshooting.md
-      - Migration Notes: 10-migration-notes.md
+      - Language Guide: index.md
+      - English:
+          - Overview: en/index.md
+          - User Guide: en/user-guide.md
+          - Troubleshooting: en/troubleshooting.md
+          - Migration Notes: en/migration-notes.md
+      - Japanese:
+          - Overview: ja/index.md
+          - User Guide: 11-user-guide.md
+          - Troubleshooting: 12-troubleshooting.md
+          - Migration Notes: 10-migration-notes.md
   - Design:
       - Design Basis: 00-design-basis.md
       - Product Brief: 01-product-brief.md
