@@ -1,0 +1,36 @@
+name: Feature request
+description: Propose a new capability or workflow improvement
+title: "[feature] "
+labels:
+  - enhancement
+body:
+  - type: dropdown
+    id: lane
+    attributes:
+      label: Target lane
+      options:
+        - stable
+        - beta
+        - preview
+        - unsure
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What user problem or workflow gap does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the desired tools, workflow, or UX.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include other tools, MCP servers, or workflows you evaluated.

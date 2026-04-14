@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+          cache: true
+      - name: Resolve Dart dependencies
+        run: dart pub get
+      - name: Analyze
+        run: dart analyze
+      - name: Test
+        run: dart test
+      - name: Install harness dependencies
+        run: pnpm -C harness install --frozen-lockfile
+      - name: Bootstrap docs toolchain
+        run: pnpm -C harness bootstrap
+      - name: Build docs
+        run: ./harness/.venv-docs/bin/mkdocs build --strict

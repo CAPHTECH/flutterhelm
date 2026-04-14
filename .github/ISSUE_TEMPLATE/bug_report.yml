@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a defect in FlutterHelm behavior
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for reproducible defects in FlutterHelm.
+        Do not report vulnerabilities here. Use `SECURITY.md` instead.
+  - type: dropdown
+    id: support-level
+    attributes:
+      label: Support level
+      options:
+        - stable
+        - beta
+        - preview
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the problem in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the exact tool calls or commands when possible.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Dart version, Flutter version, and relevant external tools such as Xcode or mobile-mcp.
+    validations:
+      required: true

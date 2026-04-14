@@ -3,9 +3,11 @@
   "version": "0.2.0",
   "description": "Run FlutterHelm as a repo-local Codex plugin with stable local workflows and opt-in beta companion guidance.",
   "author": {
-    "name": "FlutterHelm Contributors"
+    "name": "CAPHTECH"
   },
-  "license": "[TODO: choose-license]",
+  "homepage": "https://github.com/CAPHTECH/flutterhelm",
+  "repository": "https://github.com/CAPHTECH/flutterhelm",
+  "license": "MIT",
   "keywords": [
     "flutter",
     "mcp",
