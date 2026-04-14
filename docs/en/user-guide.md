@@ -56,13 +56,14 @@ If you prefer a checkout-free path, use the `npx` wrapper through your MCP clien
   "mcpServers": {
     "flutterhelm": {
       "command": "npx",
-      "args": ["-y", "github:CAPHTECH/flutterhelm", "serve"]
+      "args": ["--yes", "--quiet", "github:CAPHTECH/flutterhelm", "serve"]
     }
   }
 }
 ```
 
 That wrapper uses the repository package directly from GitHub and then runs FlutterHelm through `dart` or `flutter`.
+It also redirects setup output away from MCP `stdout`, which keeps the `stdio` protocol clean.
 
 ### 3.3 Minimal MCP client config
 
@@ -71,7 +72,7 @@ That wrapper uses the repository package directly from GitHub and then runs Flut
   "mcpServers": {
     "flutterhelm": {
       "command": "npx",
-      "args": ["-y", "github:CAPHTECH/flutterhelm", "serve"]
+      "args": ["--yes", "--quiet", "github:CAPHTECH/flutterhelm", "serve"]
     }
   }
 }

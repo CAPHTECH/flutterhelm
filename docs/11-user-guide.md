@@ -56,13 +56,14 @@ checkout せずに導入したいなら、MCP client 側で `npx` wrapper を使
   "mcpServers": {
     "flutterhelm": {
       "command": "npx",
-      "args": ["-y", "github:CAPHTECH/flutterhelm", "serve"]
+      "args": ["--yes", "--quiet", "github:CAPHTECH/flutterhelm", "serve"]
     }
   }
 }
 ```
 
 この wrapper は GitHub 上の repo package をそのまま使い、内部で `dart` または `flutter` から FlutterHelm を起動します。
+初回 setup 出力は MCP `stdout` を汚さないよう `stderr` 側へ逃がします。
 
 ### 3.3 MCP client 設定の最小例
 
@@ -71,7 +72,7 @@ checkout せずに導入したいなら、MCP client 側で `npx` wrapper を使
   "mcpServers": {
     "flutterhelm": {
       "command": "npx",
-      "args": ["-y", "github:CAPHTECH/flutterhelm", "serve"]
+      "args": ["--yes", "--quiet", "github:CAPHTECH/flutterhelm", "serve"]
     }
   }
 }

@@ -126,13 +126,14 @@ enabledWorkflows:
   "mcpServers": {
     "flutterhelm": {
       "command": "npx",
-      "args": ["-y", "github:CAPHTECH/flutterhelm", "serve"]
+      "args": ["--yes", "--quiet", "github:CAPHTECH/flutterhelm", "serve"]
     }
   }
 }
 ```
 
 This works without cloning the repository, as long as `npx` and `dart` or `flutter` are available on PATH.
+The wrapper keeps setup output on `stderr` so MCP `stdio` remains clean.
 
 If you already cloned the repository and want the local source path instead:
 

@@ -50,9 +50,16 @@ function ensurePubGet(runtime) {
 
   const pubGet = spawnSync(runtime.command, runtime.pubGetArgs, {
     cwd: packageRoot,
-    stdio: 'inherit',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
     shell: process.platform === 'win32',
   });
+  if (pubGet.stdout) {
+    process.stderr.write(pubGet.stdout);
+  }
+  if (pubGet.stderr) {
+    process.stderr.write(pubGet.stderr);
+  }
   if (pubGet.status !== 0) {
     process.exit(pubGet.status ?? 1);
   }
