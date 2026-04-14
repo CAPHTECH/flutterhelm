@@ -8,14 +8,16 @@ The plugin default `.mcp.json` starts only FlutterHelm:
 {
   "mcpServers": {
     "flutterhelm": {
-      "command": "mise",
-      "args": ["exec", "--", "dart", "run", "bin/flutterhelm.dart", "serve"]
+      "command": "npx",
+      "args": ["-y", "github:CAPHTECH/flutterhelm", "serve"]
     }
   }
 }
 ```
 
-## Local setup
+This requires `npx` plus `dart` or `flutter` on PATH. The wrapper installs the repo package from GitHub and launches `flutterhelm serve`.
+
+## Local setup fallback
 
 ```bash
 mise trust

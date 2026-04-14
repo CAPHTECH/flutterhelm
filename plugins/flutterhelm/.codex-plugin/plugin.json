@@ -1,7 +1,7 @@
 {
   "name": "flutterhelm",
   "version": "0.2.0",
-  "description": "Run FlutterHelm as a repo-local Codex plugin with stable local workflows and opt-in beta companion guidance.",
+  "description": "Run FlutterHelm through an npx-backed Codex plugin with stable workflows and opt-in beta companion guidance.",
   "author": {
     "name": "CAPHTECH"
   },
@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "FlutterHelm",
     "shortDescription": "Run stable FlutterHelm workflows and opt into beta companions",
-    "longDescription": "Use FlutterHelm as a repo-local plugin for stable Flutter workspace, session, run, test, profile, and native handoff workflows. The default plugin path starts only FlutterHelm; beta companion MCP setup for runtime interaction and native build lives in bundled skills.",
+    "longDescription": "Use FlutterHelm through the bundled npx wrapper for stable Flutter workspace, session, run, test, profile, and native handoff workflows. The default plugin path starts only FlutterHelm; beta companion MCP setup for runtime interaction and native build lives in bundled skills.",
     "developerName": "FlutterHelm",
     "category": "Productivity",
     "capabilities": [
@@ -29,8 +29,8 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Use FlutterHelm to set up this repo and run a stable local debug and test loop",
-      "Use FlutterHelm to diagnose a failing run_app or test workflow in this repo",
+      "Use FlutterHelm to start a stable Flutter debug and test loop through the bundled plugin",
+      "Use FlutterHelm to diagnose a failing run_app or test workflow",
       "Show me how to enable FlutterHelm beta runtime interaction or native build safely"
     ],
     "brandColor": "#0175C2"

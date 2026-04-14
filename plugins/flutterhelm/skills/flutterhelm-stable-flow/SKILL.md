@@ -1,11 +1,11 @@
 ---
 name: flutterhelm-stable-flow
-description: Guide stable FlutterHelm setup and execution for repo-local stdio workflows. Use when Codex needs to start or operate stable FlutterHelm flows such as workspace selection, run and inspect, tests, profiling, compatibility checks, or native handoff without enabling beta runtime_interaction or native_build paths.
+description: Guide stable FlutterHelm setup and execution through the default npx-backed plugin workflow. Use when Codex needs to start or operate stable FlutterHelm flows such as workspace selection, run and inspect, tests, profiling, compatibility checks, or native handoff without enabling beta runtime_interaction or native_build paths.
 ---
 
 # FlutterHelm Stable Flow
 
-Use this skill to run the default, stable FlutterHelm loop in a repo that already contains FlutterHelm.
+Use this skill to run the default, stable FlutterHelm loop through the plugin's bundled npx wrapper.
 
 ## Workflow
 
@@ -24,6 +24,7 @@ Use this skill to run the default, stable FlutterHelm loop in a repo that alread
 
 ## Default expectations
 
+- The plugin default path uses `npx -y github:CAPHTECH/flutterhelm serve`.
 - Prefer the built-in delegate and let FlutterHelm handle official Flutter MCP fallback automatically.
 - Keep `runtime_interaction` and `native_build` disabled unless the user explicitly asks for beta behavior.
 - Prefer `session://<id>/health`, `config://compatibility/current`, and `config://adapters/current` over guessing why a workflow is unavailable.
