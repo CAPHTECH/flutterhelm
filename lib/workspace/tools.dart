@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutterhelm/adapters/registry.dart';
 import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/server/errors.dart';
 import 'package:flutterhelm/utils/process_runner.dart';
@@ -12,11 +13,13 @@ class WorkspaceToolService {
     required this.processRunner,
     required this.artifactStore,
     required this.flutterExecutable,
+    this.delegateAdapterFactory,
   });
 
   final ProcessRunner processRunner;
   final ArtifactStore artifactStore;
   final String flutterExecutable;
+  final Future<DelegateAdapter> Function()? delegateAdapterFactory;
 
   Future<List<Map<String, Object?>>> discoverWorkspaces({
     required List<String> roots,
@@ -56,6 +59,28 @@ class WorkspaceToolService {
     required String workspaceRoot,
     bool fatalInfos = false,
     bool fatalWarnings = true,
+  }) async {
+    final delegateResult = await _tryDelegate<Map<String, Object?>>(
+      (DelegateAdapter adapter) => adapter.analyzeProject(
+        workspaceRoot: workspaceRoot,
+        fatalInfos: fatalInfos,
+        fatalWarnings: fatalWarnings,
+      ),
+    );
+    if (delegateResult != null) {
+      return delegateResult;
+    }
+    return _analyzeProjectWithFlutterCli(
+      workspaceRoot: workspaceRoot,
+      fatalInfos: fatalInfos,
+      fatalWarnings: fatalWarnings,
+    );
+  }
+
+  Future<Map<String, Object?>> _analyzeProjectWithFlutterCli({
+    required String workspaceRoot,
+    required bool fatalInfos,
+    required bool fatalWarnings,
   }) async {
     final arguments = <String>[
       'analyze',
@@ -146,11 +171,27 @@ class WorkspaceToolService {
         retryable: true,
       );
     }
+    final delegateResult = await _tryDelegate<Map<String, Object?>>(
+      (DelegateAdapter adapter) => adapter.pubSearch(
+        query: trimmedQuery,
+        limit: limit,
+      ),
+    );
+    if (delegateResult != null) {
+      return delegateResult;
+    }
+    return _pubSearchViaHttp(query: trimmedQuery, limit: limit);
+  }
+
+  Future<Map<String, Object?>> _pubSearchViaHttp({
+    required String query,
+    required int limit,
+  }) async {
     final effectiveLimit = limit.clamp(1, 20).toInt();
     final client = HttpClient();
     try {
       final searchUri = Uri.https('pub.dev', '/api/search', <String, String>{
-        'q': trimmedQuery,
+        'q': query,
       });
       final searchResponse = await _getJson(client, searchUri);
       final rawPackages = searchResponse['packages'];
@@ -171,7 +212,7 @@ class WorkspaceToolService {
         packageNames.map((String package) => _fetchPackageDetails(client, package)),
       );
       return <String, Object?>{
-        'query': trimmedQuery,
+        'query': query,
         'packages': packages,
       };
     } on SocketException catch (error) {
@@ -204,12 +245,29 @@ class WorkspaceToolService {
     final descriptor = versionConstraint == null || versionConstraint.isEmpty
         ? '$descriptorPrefix$package'
         : '$descriptorPrefix$package:$versionConstraint';
-    final result = await processRunner.run(
-      flutterExecutable,
-      <String>['pub', 'add', descriptor],
-      workingDirectory: workspaceRoot,
-      timeout: const Duration(minutes: 3),
+    final delegateResult = await _tryDelegate<Map<String, Object?>>(
+      (DelegateAdapter adapter) => adapter.dependencyAdd(
+        workspaceRoot: workspaceRoot,
+        package: package,
+        versionConstraint: versionConstraint,
+        devDependency: devDependency,
+      ),
     );
+    final result = delegateResult == null
+        ? await processRunner.run(
+            flutterExecutable,
+            <String>['pub', 'add', descriptor],
+            workingDirectory: workspaceRoot,
+            timeout: const Duration(minutes: 3),
+          )
+        : ProcessRunResult(
+            exitCode: _intValue(delegateResult['exitCode']) ?? 0,
+            stdout: delegateResult['stdout'] as String? ?? '',
+            stderr: delegateResult['stderr'] as String? ?? '',
+            duration: Duration(
+              milliseconds: _intValue(delegateResult['durationMs']) ?? 0,
+            ),
+          );
     await _writeMutationLogs(
       changeId: changeId,
       stdout: result.stdout,
@@ -280,12 +338,27 @@ class WorkspaceToolService {
       contents: beforeManifest,
     );
 
-    final result = await processRunner.run(
-      flutterExecutable,
-      <String>['pub', 'remove', package],
-      workingDirectory: workspaceRoot,
-      timeout: const Duration(minutes: 3),
+    final delegateResult = await _tryDelegate<Map<String, Object?>>(
+      (DelegateAdapter adapter) => adapter.dependencyRemove(
+        workspaceRoot: workspaceRoot,
+        package: package,
+      ),
     );
+    final result = delegateResult == null
+        ? await processRunner.run(
+            flutterExecutable,
+            <String>['pub', 'remove', package],
+            workingDirectory: workspaceRoot,
+            timeout: const Duration(minutes: 3),
+          )
+        : ProcessRunResult(
+            exitCode: _intValue(delegateResult['exitCode']) ?? 0,
+            stdout: delegateResult['stdout'] as String? ?? '',
+            stderr: delegateResult['stderr'] as String? ?? '',
+            duration: Duration(
+              milliseconds: _intValue(delegateResult['durationMs']) ?? 0,
+            ),
+          );
     await _writeMutationLogs(
       changeId: changeId,
       stdout: result.stdout,
@@ -348,6 +421,25 @@ class WorkspaceToolService {
     required String workspaceRoot,
     required String symbol,
   }) async {
+    final delegateResult = await _tryDelegate<Map<String, Object?>>(
+      (DelegateAdapter adapter) => adapter.resolveSymbol(
+        workspaceRoot: workspaceRoot,
+        symbol: symbol,
+      ),
+    );
+    if (delegateResult != null) {
+      return delegateResult;
+    }
+    return _resolveSymbolLocally(
+      workspaceRoot: workspaceRoot,
+      symbol: symbol,
+    );
+  }
+
+  Future<Map<String, Object?>> _resolveSymbolLocally({
+    required String workspaceRoot,
+    required String symbol,
+  }) async {
     final matches = <Map<String, Object?>>[];
     await for (final entity in Directory(workspaceRoot).list(recursive: true, followLinks: false)) {
       if (entity is! File || !entity.path.endsWith('.dart')) {
@@ -373,6 +465,25 @@ class WorkspaceToolService {
       'matches': matches,
       'resolved': matches.isNotEmpty,
     };
+  }
+
+  Future<T?> _tryDelegate<T>(
+    Future<T> Function(DelegateAdapter adapter) action,
+  ) async {
+    final factory = delegateAdapterFactory;
+    if (factory == null) {
+      return null;
+    }
+    try {
+      final adapter = await factory();
+      final health = await adapter.health();
+      if (!health.connected) {
+        return null;
+      }
+      return await action(adapter);
+    } on Object {
+      return null;
+    }
   }
 
   Future<Map<String, Object?>> _loadPubspec(File file) async {
@@ -606,5 +717,15 @@ class WorkspaceToolService {
       );
     }
     return <String, Object?>{};
+  }
+
+  int? _intValue(Object? value) {
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    return null;
   }
 }

@@ -1,0 +1,16 @@
+{
+  "id": "official-delegate-flow",
+  "mode": "software",
+  "tags": ["delegate"],
+  "input": {
+    "checks": ["phase17-delegate-docs", "phase17-delegate-flow"]
+  },
+  "expect": {
+    "exitCode": 0,
+    "stdoutIncludes": [
+      "check:phase17-delegate-docs:ok",
+      "check:phase17-delegate-flow:ok",
+      "summary:official-delegate-flow"
+    ]
+  }
+}

@@ -134,6 +134,7 @@ class HardeningToolService {
     final runtimeDriverProvider = resolvedConfig.adapters.providerForFamily(
       'runtimeDriver',
     );
+    final delegateProvider = resolvedConfig.adapters.providerForFamily('delegate');
     final nativeBuildProvider = resolvedConfig.adapters.providerForFamily(
       'nativeBuild',
     );
@@ -167,8 +168,29 @@ class HardeningToolService {
         : await Directory(p.join(activeRoot, 'android')).exists();
     final nativeBuildHealth = await adapterRegistry.familyHealth('nativeBuild');
     final nativeBuildHealthy = nativeBuildHealth['healthy'] as bool? ?? false;
+    final delegateHealth = await adapterRegistry.familyHealth('delegate');
+    final delegateHealthy = delegateHealth['healthy'] as bool? ?? false;
 
     final checks = <String, Object?>{
+      'delegate': _probeStatus(
+        supported: delegateProvider != null && delegateHealthy,
+        status: delegateProvider == null
+            ? 'unavailable'
+            : (delegateHealthy ? 'ok' : 'degraded'),
+        reason: delegateProvider == null
+            ? 'No delegate provider is configured.'
+            : delegateHealth['reason'] as String?,
+        requirements: <String>[
+          'builtin.delegate.workspace must be able to start `dart mcp-server`.',
+          'The active workspace root must be registerable through add_roots.',
+        ],
+        extra: <String, Object?>{
+          'providerId': delegateProvider?.id,
+          'kind': delegateProvider?.kind,
+          if (delegateHealth['providerInfo'] is Map)
+            'providerInfo': delegateHealth['providerInfo'],
+        },
+      ),
       'flutterCli': _probeStatus(
         supported: flutterProbe.available,
         status: flutterProbe.available ? 'ok' : 'unavailable',

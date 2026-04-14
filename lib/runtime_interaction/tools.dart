@@ -134,7 +134,8 @@ class RuntimeInteractionToolService {
       'nativeBridgeAvailablePlatforms': detectNativeBridgePlatformsSync(
         session.workspaceRoot,
       ),
-      if (session.nativeContext != null) 'nativeContext': session.nativeContext!.toJson(),
+      if (session.nativeContext != null)
+        'nativeContext': session.nativeContext!.toJson(),
       'nativeBuildAttached': session.nativeContext != null,
       'nativeLaunchStatus': session.nativeContext?.launchStatus,
       'vmService': <String, Object?>{
@@ -180,7 +181,9 @@ class RuntimeInteractionToolService {
     }
     if (session.ownership != SessionOwnership.owned) {
       issues.add('profiling requires an owned session');
-      guidance.add('Use run_app to create an owned session instead of attach_app.');
+      guidance.add(
+        'Use run_app to create an owned session instead of attach_app.',
+      );
     }
     if (session.nativeContext != null &&
         session.nativeContext!.flutterRuntimeAttached != true) {
@@ -191,7 +194,9 @@ class RuntimeInteractionToolService {
     }
     if (session.state != SessionState.running) {
       issues.add('session is not running');
-      guidance.add('Profiling and runtime interaction tools require a live running session.');
+      guidance.add(
+        'Profiling and runtime interaction tools require a live running session.',
+      );
     }
     if (!session.vmServiceAvailable) {
       issues.add('vm service is unavailable');
@@ -206,10 +211,14 @@ class RuntimeInteractionToolService {
       guidance.add('Profile mode is recommended for performance measurements.');
     }
     if (!session.dtdAvailable) {
-      guidance.add('DTD is not available; FlutterHelm will use vm_service-backed profiling.');
+      guidance.add(
+        'DTD is not available; FlutterHelm will use vm_service-backed profiling.',
+      );
     }
     if (!workflowEnabled) {
-      guidance.add('runtime_interaction workflow is disabled; UI actions are intentionally opt-in.');
+      guidance.add(
+        'runtime_interaction workflow is disabled; UI actions are intentionally opt-in.',
+      );
     }
     if (workflowEnabled && !driverEnabled) {
       issues.add('runtime driver is disabled');
@@ -223,9 +232,13 @@ class RuntimeInteractionToolService {
       );
     } else if (driverEnabled && status.configured && !status.connected) {
       issues.add('runtime driver is not connected');
-      guidance.add('Runtime driver is configured but not connected; UI actions will fail until it is reachable.');
+      guidance.add(
+        'Runtime driver is configured but not connected; UI actions will fail until it is reachable.',
+      );
     } else if (!driverEnabled) {
-      guidance.add('Runtime driver is disabled; screenshot fallback may still work on iOS simulator.');
+      guidance.add(
+        'Runtime driver is disabled; screenshot fallback may still work on iOS simulator.',
+      );
     }
 
     return <String, Object?>{
@@ -245,7 +258,8 @@ class RuntimeInteractionToolService {
       'profilingReady': profilingReady,
       'runtimeInteractionReady': runtimeInteractionReady,
       'screenshotReady': screenshotReady,
-      if (session.nativeContext != null) 'nativeContext': session.nativeContext!.toJson(),
+      if (session.nativeContext != null)
+        'nativeContext': session.nativeContext!.toJson(),
       'nativeBuildAttached': session.nativeContext != null,
       'nativeLaunchStatus': session.nativeContext?.launchStatus,
       ...status.toJson(),
@@ -266,74 +280,70 @@ class RuntimeInteractionToolService {
       captureId,
       normalizedFormat,
     );
-    final targetPath = p.join(
-      artifactStore.sessionArtifactsDir(session.sessionId),
-      'screenshot-$captureId.$normalizedFormat',
-    );
 
     var backend = 'external_adapter';
     var driverConnected = false;
     String? fallbackReason;
+    String? driverScratchPath;
+    List<int>? screenshotBytes;
     try {
       final runtimeDriver = await _driverAdapter.health();
       driverConnected = runtimeDriver.connected;
       if (runtimeDriver.connected) {
         final deviceId = _requireDevice(session);
+        driverScratchPath = _driverScreenshotScratchPath(
+          captureId: captureId,
+          format: normalizedFormat,
+        );
+        await File(driverScratchPath).parent.create(recursive: true);
         await _driverAdapter.captureScreenshot(
           deviceId: deviceId,
-          saveTo: targetPath,
+          saveTo: driverScratchPath,
           format: normalizedFormat,
         );
         final artifactReady = await _waitForScreenshotArtifact(
-          targetPath,
+          driverScratchPath,
           timeout: const Duration(seconds: 5),
         );
         if (!artifactReady) {
           backend = 'ios_simctl';
           fallbackReason = 'driver_artifact_missing';
-          await _captureScreenshotViaFallback(
+          screenshotBytes = await _captureScreenshotBytesViaFallback(
             session: session,
-            targetPath: targetPath,
+            captureId: captureId,
             format: normalizedFormat,
           );
-          await _requireScreenshotArtifact(
-            targetPath,
-            timeout: const Duration(seconds: 5),
-          );
+        } else {
+          screenshotBytes = await File(driverScratchPath).readAsBytes();
         }
       } else {
         backend = 'ios_simctl';
         fallbackReason = 'driver_not_connected';
-        await _captureScreenshotViaFallback(
+        screenshotBytes = await _captureScreenshotBytesViaFallback(
           session: session,
-          targetPath: targetPath,
+          captureId: captureId,
           format: normalizedFormat,
-        );
-        await _requireScreenshotArtifact(
-          targetPath,
-          timeout: const Duration(seconds: 5),
         );
       }
     } catch (_) {
       backend = 'ios_simctl';
       fallbackReason ??= 'driver_capture_failed';
-      await _captureScreenshotViaFallback(
+      screenshotBytes = await _captureScreenshotBytesViaFallback(
         session: session,
-        targetPath: targetPath,
+        captureId: captureId,
         format: normalizedFormat,
       );
-      await _requireScreenshotArtifact(
-        targetPath,
-        timeout: const Duration(seconds: 5),
-      );
+    } finally {
+      if (driverScratchPath != null) {
+        await _deleteIfExists(driverScratchPath);
+      }
     }
 
-    final bytes = await File(targetPath).readAsBytes();
     await artifactStore.writeSessionScreenshot(
       sessionId: session.sessionId,
       captureId: captureId,
       format: normalizedFormat,
-      bytes: bytes,
+      bytes: screenshotBytes,
     );
 
     return <String, Object?>{
@@ -346,7 +356,8 @@ class RuntimeInteractionToolService {
       if (fallbackReason != null) 'fallbackReason': fallbackReason,
       'resource': <String, Object?>{
         'uri': uri,
-        'mimeType': 'image/${normalizedFormat == 'jpg' ? 'jpeg' : normalizedFormat}',
+        'mimeType':
+            'image/${normalizedFormat == 'jpg' ? 'jpeg' : normalizedFormat}',
         'title': 'Session screenshot',
       },
     };
@@ -359,7 +370,11 @@ class RuntimeInteractionToolService {
   }) async {
     final session = _requireInteractiveSession(sessionId);
     final driver = await _requireConnectedDriver(session);
-    final match = await _resolveLocator(session: session, locator: locator, driver: driver);
+    final match = await _resolveLocator(
+      session: session,
+      locator: locator,
+      driver: driver,
+    );
     final deviceId = _requireDevice(session);
     await _driverAdapter.tap(
       deviceId: deviceId,
@@ -367,7 +382,9 @@ class RuntimeInteractionToolService {
       y: match.y.roundToDouble(),
     );
     if (timeoutMs > 0) {
-      await Future<void>.delayed(Duration(milliseconds: timeoutMs.clamp(100, 1000)));
+      await Future<void>.delayed(
+        Duration(milliseconds: timeoutMs.clamp(100, 1000)),
+      );
     }
     return <String, Object?>{
       'sessionId': session.sessionId,
@@ -386,7 +403,11 @@ class RuntimeInteractionToolService {
   }) async {
     final session = _requireInteractiveSession(sessionId);
     final driver = await _requireConnectedDriver(session);
-    final match = await _resolveLocator(session: session, locator: locator, driver: driver);
+    final match = await _resolveLocator(
+      session: session,
+      locator: locator,
+      driver: driver,
+    );
     final deviceId = _requireDevice(session);
     await _driverAdapter.tap(
       deviceId: deviceId,
@@ -399,7 +420,9 @@ class RuntimeInteractionToolService {
       submit: submit,
     );
     if (timeoutMs > 0) {
-      await Future<void>.delayed(Duration(milliseconds: timeoutMs.clamp(100, 1000)));
+      await Future<void>.delayed(
+        Duration(milliseconds: timeoutMs.clamp(100, 1000)),
+      );
     }
     return <String, Object?>{
       'sessionId': session.sessionId,
@@ -427,7 +450,11 @@ class RuntimeInteractionToolService {
 
     for (var attempt = 0; attempt <= maxScrolls; attempt++) {
       final elements = await _listElements(session, driver);
-      final match = _matchLocator(elements, adjustedLocator, driver.supportedLocatorFields);
+      final match = _matchLocator(
+        elements,
+        adjustedLocator,
+        driver.supportedLocatorFields,
+      );
       if (match != null) {
         var settledMatch = match;
         if (attempt > 0) {
@@ -457,14 +484,17 @@ class RuntimeInteractionToolService {
         distance: stepPixels,
       );
       if (timeoutMs > 0) {
-        await Future<void>.delayed(Duration(milliseconds: timeoutMs.clamp(100, 600)));
+        await Future<void>.delayed(
+          Duration(milliseconds: timeoutMs.clamp(100, 600)),
+        );
       }
     }
 
     throw FlutterHelmToolError(
       code: 'SEMANTIC_LOCATOR_NOT_FOUND',
       category: 'runtime',
-      message: 'No visible widget matched the provided locator after scrolling.',
+      message:
+          'No visible widget matched the provided locator after scrolling.',
       retryable: true,
       detailsResource: _healthResource(session.sessionId),
     );
@@ -490,7 +520,8 @@ class RuntimeInteractionToolService {
       throw FlutterHelmToolError(
         code: 'SESSION_STALE',
         category: 'runtime',
-        message: 'The target session is stale and cannot be used for runtime interaction.',
+        message:
+            'The target session is stale and cannot be used for runtime interaction.',
         retryable: true,
         detailsResource: _healthResource(session.sessionId),
       );
@@ -500,7 +531,8 @@ class RuntimeInteractionToolService {
       throw FlutterHelmToolError(
         code: 'SESSION_NOT_RUNNING',
         category: 'runtime',
-        message: 'The target session is not attached to a live Flutter process.',
+        message:
+            'The target session is not attached to a live Flutter process.',
         retryable: true,
         detailsResource: _healthResource(session.sessionId),
       );
@@ -526,7 +558,9 @@ class RuntimeInteractionToolService {
     return session.deviceId;
   }
 
-  Future<RuntimeDriverHealth> _requireConnectedDriver(SessionRecord session) async {
+  Future<RuntimeDriverHealth> _requireConnectedDriver(
+    SessionRecord session,
+  ) async {
     if (!driverEnabled) {
       throw FlutterHelmToolError(
         code: 'RUNTIME_DRIVER_UNAVAILABLE',
@@ -561,7 +595,8 @@ class RuntimeInteractionToolService {
       throw FlutterHelmToolError(
         code: 'RUNTIME_DRIVER_UNAVAILABLE',
         category: 'runtime',
-        message: 'Runtime driver does not support platform ${session.platform}.',
+        message:
+            'Runtime driver does not support platform ${session.platform}.',
         retryable: false,
         detailsResource: _healthResource(session.sessionId),
       );
@@ -574,9 +609,7 @@ class RuntimeInteractionToolService {
     RuntimeDriverHealth driver,
   ) async {
     final deviceId = _requireDevice(session);
-    final raw = await _driverAdapter.listElements(
-      deviceId: deviceId,
-    );
+    final raw = await _driverAdapter.listElements(deviceId: deviceId);
     final elements = _extractElements(raw);
     final normalized = elements
         .map((Map<String, Object?> element) => _ScreenElement.fromMap(element))
@@ -597,7 +630,11 @@ class RuntimeInteractionToolService {
     required RuntimeDriverHealth driver,
   }) async {
     final elements = await _listElements(session, driver);
-    final match = _matchLocator(elements, locator, driver.supportedLocatorFields);
+    final match = _matchLocator(
+      elements,
+      locator,
+      driver.supportedLocatorFields,
+    );
     if (match == null) {
       throw FlutterHelmToolError(
         code: 'SEMANTIC_LOCATOR_NOT_FOUND',
@@ -653,7 +690,8 @@ class RuntimeInteractionToolService {
         throw FlutterHelmToolError(
           code: 'SEMANTIC_LOCATOR_NOT_FOUND',
           category: 'runtime',
-          message: 'Locator index $index is out of range for ${filtered.length} matches.',
+          message:
+              'Locator index $index is out of range for ${filtered.length} matches.',
           retryable: true,
         );
       }
@@ -664,7 +702,8 @@ class RuntimeInteractionToolService {
       throw FlutterHelmToolError(
         code: 'SEMANTIC_LOCATOR_AMBIGUOUS',
         category: 'runtime',
-        message: 'Locator matched ${filtered.length} widgets; provide index or refine the locator.',
+        message:
+            'Locator matched ${filtered.length} widgets; provide index or refine the locator.',
         retryable: true,
       );
     }
@@ -701,7 +740,8 @@ class RuntimeInteractionToolService {
       throw FlutterHelmToolError(
         code: 'SCREENSHOT_CAPTURE_UNAVAILABLE',
         category: 'runtime',
-        message: 'Screenshot capture requires a connected runtime driver or iOS simulator fallback.',
+        message:
+            'Screenshot capture requires a connected runtime driver or iOS simulator fallback.',
         retryable: true,
         detailsResource: _healthResource(session.sessionId),
       );
@@ -731,6 +771,31 @@ class RuntimeInteractionToolService {
         retryable: true,
         detailsResource: _healthResource(session.sessionId),
       );
+    }
+  }
+
+  Future<List<int>> _captureScreenshotBytesViaFallback({
+    required SessionRecord session,
+    required String captureId,
+    required String format,
+  }) async {
+    final targetPath = p.join(
+      artifactStore.sessionArtifactsDir(session.sessionId),
+      'screenshot-$captureId.$format',
+    );
+    await _captureScreenshotViaFallback(
+      session: session,
+      targetPath: targetPath,
+      format: format,
+    );
+    await _requireScreenshotArtifact(
+      targetPath,
+      timeout: const Duration(seconds: 5),
+    );
+    try {
+      return await File(targetPath).readAsBytes();
+    } finally {
+      await _deleteIfExists(targetPath);
     }
   }
 
@@ -765,6 +830,25 @@ class RuntimeInteractionToolService {
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
     return false;
+  }
+
+  String _driverScreenshotScratchPath({
+    required String captureId,
+    required String format,
+  }) {
+    return p.join(
+      Directory.current.path,
+      '.dart_tool',
+      'flutterhelm-runtime-driver',
+      'screenshot-$captureId.$format',
+    );
+  }
+
+  Future<void> _deleteIfExists(String path) async {
+    final file = File(path);
+    if (await file.exists()) {
+      await file.delete();
+    }
   }
 
   List<Map<String, Object?>> _extractElements(Object? raw) {
@@ -902,10 +986,7 @@ class _ScreenElement {
             map['name'],
       ),
       label: _coerceString(
-        map['label'] ??
-            map['accessibilityLabel'] ??
-            map['name'] ??
-            map['text'],
+        map['label'] ?? map['accessibilityLabel'] ?? map['name'] ?? map['text'],
       ),
       valueKey: _coerceString(
         map['valueKey'] ?? map['key'] ?? map['identifier'],

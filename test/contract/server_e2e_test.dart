@@ -262,7 +262,9 @@ void main() {
       expect(decoded['runId'], unitRunId);
     });
 
-    test('supports pub search and approval replay for dependency mutation', () async {
+    test(
+      'supports pub search and approval replay for dependency mutation',
+      () async {
       final sandbox = await Directory.systemTemp.createTemp('flutterhelm-e2e');
       addTearDown(() => sandbox.delete(recursive: true));
 
@@ -351,7 +353,9 @@ void main() {
         auditLines.any((String line) => line.contains('"result":"approved"')),
         isTrue,
       );
-    });
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
 
     test('requires approval for fallback workspace root selection', () async {
       final sandbox = await Directory.systemTemp.createTemp('flutterhelm-e2e');

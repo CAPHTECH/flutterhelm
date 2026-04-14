@@ -135,6 +135,7 @@ FlutterHelm の本質はここです。
 
 - できる限り official implementation を再利用する
 - FlutterHelm は contract 安定化と orchestration に集中する
+- current implementation は official Flutter MCP を primary delegate とし、timeout / malformed payload / DTD connect failure 時のみ CLI / vm_service backend へ fallback する
 
 #### B. Flutter CLI adapter
 

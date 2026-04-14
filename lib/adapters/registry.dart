@@ -6,6 +6,7 @@ import 'package:flutterhelm/config/config.dart';
 import 'package:flutterhelm/observability/store.dart';
 import 'package:flutterhelm/server/support_levels.dart';
 import 'package:flutterhelm/utils/process_runner.dart';
+import 'package:path/path.dart' as p;
 
 const Duration stdioJsonProviderInvokeTimeout = Duration(seconds: 30);
 const List<Duration> stdioJsonProviderBackoffSchedule = <Duration>[
@@ -34,6 +35,72 @@ class RuntimeDriverHealth {
   final List<String> supportedLocatorFields;
   final List<String> screenshotFormats;
   final String? error;
+}
+
+class DelegateHealth {
+  const DelegateHealth({
+    required this.connected,
+    required this.serverName,
+    required this.serverVersion,
+    required this.supportedOperations,
+    this.command,
+    this.args = const <String>[],
+    this.error,
+  });
+
+  final bool connected;
+  final String? serverName;
+  final String? serverVersion;
+  final List<String> supportedOperations;
+  final String? command;
+  final List<String> args;
+  final String? error;
+}
+
+abstract class DelegateAdapter {
+  Future<DelegateHealth> health();
+
+  Future<Map<String, Object?>> analyzeProject({
+    required String workspaceRoot,
+    required bool fatalInfos,
+    required bool fatalWarnings,
+  });
+
+  Future<Map<String, Object?>> resolveSymbol({
+    required String workspaceRoot,
+    required String symbol,
+  });
+
+  Future<Map<String, Object?>> pubSearch({
+    required String query,
+    required int limit,
+  });
+
+  Future<Map<String, Object?>> dependencyAdd({
+    required String workspaceRoot,
+    required String package,
+    required String? versionConstraint,
+    required bool devDependency,
+  });
+
+  Future<Map<String, Object?>> dependencyRemove({
+    required String workspaceRoot,
+    required String package,
+  });
+
+  Future<Map<String, Object?>> getRuntimeErrors({
+    required String dtdUri,
+  });
+
+  Future<Map<String, Object?>> getWidgetTree({
+    required String dtdUri,
+    required int depth,
+    required bool includeProperties,
+  });
+
+  Future<void> hotReload({required String dtdUri});
+
+  Future<void> hotRestart({required String dtdUri});
 }
 
 abstract class RuntimeDriverAdapter {
@@ -171,6 +238,7 @@ class AdapterRegistry {
   final ObservabilityStore? observability;
   final Map<String, _StdioJsonProviderClient> _providerClients =
       <String, _StdioJsonProviderClient>{};
+  DelegateAdapter? _delegateAdapter;
   RuntimeDriverAdapter? _runtimeDriverAdapter;
 
   static const List<String> supportedFamilies = <String>[
@@ -181,6 +249,45 @@ class AdapterRegistry {
     'platformBridge',
     'nativeBuild',
   ];
+
+  Future<DelegateAdapter> delegateAdapter() async {
+    final existing = _delegateAdapter;
+    if (existing != null) {
+      return existing;
+    }
+
+    final provider = config.adapters.providerForFamily('delegate');
+    if (provider == null) {
+      final adapter = _UnavailableDelegateAdapter(
+        reason: 'No active delegate provider is configured.',
+      );
+      _delegateAdapter = adapter;
+      return adapter;
+    }
+
+    final adapter = switch (provider.kind) {
+      'stdio_json' => _StdioJsonDelegateAdapter(client: _providerClient(provider)),
+      _ => _BuiltinFlutterMcpDelegateAdapter(
+        command: provider.command ?? 'dart',
+        args: provider.args.isNotEmpty
+            ? provider.args
+            : const <String>[
+                'mcp-server',
+                '--tools',
+                'all',
+                '--force-roots-fallback',
+              ],
+        startupTimeout: Duration(
+          milliseconds: provider.startupTimeoutMs > 0
+              ? provider.startupTimeoutMs
+              : 10000,
+        ),
+        observability: observability,
+      ),
+    };
+    _delegateAdapter = adapter;
+    return adapter;
+  }
 
   Future<RuntimeDriverAdapter> runtimeDriverAdapter() async {
     final existing = _runtimeDriverAdapter;
@@ -447,6 +554,42 @@ class AdapterRegistry {
       );
     }
 
+    if (family == 'delegate') {
+      final adapter = await delegateAdapter();
+      final health = await adapter.health();
+      final reason = health.error ??
+          (!health.connected ? 'Official delegate is not healthy.' : null);
+      return AdapterFamilyStatus(
+        family: family,
+        activeProviderId: providerId,
+        kind: provider.kind,
+        builtin: provider.builtin,
+        healthy: health.connected,
+        operations: health.supportedOperations,
+        supportLevel: adapterProviderSupportLevel(provider).name,
+        familySupportLevel: adapterFamilySupportLevel(family).name,
+        activeProviderSupportLevel: adapterProviderSupportLevel(provider).name,
+        includedInStableLane: adapterFamilyIncludedInStableLane(
+          family,
+          provider,
+        ),
+        state: health.connected ? 'healthy' : 'degraded',
+        reasons: <String>[
+          if (health.error != null) health.error!,
+          if (!health.connected && health.error == null)
+            'Official delegate is not healthy.',
+        ],
+        failureCount: 0,
+        reason: reason,
+        providerInfo: <String, Object?>{
+          if (health.serverName != null) 'serverName': health.serverName,
+          if (health.serverVersion != null) 'serverVersion': health.serverVersion,
+          if (health.command != null) 'command': health.command,
+          if (health.args.isNotEmpty) 'args': health.args,
+        },
+      );
+    }
+
     if (family == 'runtimeDriver') {
       final adapter = await runtimeDriverAdapter();
       final health = await adapter.health();
@@ -555,6 +698,31 @@ class AdapterRegistry {
       };
     }
 
+    if (provider.id == 'builtin.delegate.workspace' ||
+        provider.families.contains('delegate')) {
+      final adapter = await delegateAdapter();
+      final health = await adapter.health();
+      final reason = health.error ??
+          (!health.connected ? 'Official delegate is not healthy.' : null);
+      return <String, Object?>{
+        'state': health.connected ? 'healthy' : 'degraded',
+        'healthy': health.connected,
+        'supportLevel': adapterProviderSupportLevel(provider).name,
+        'includedInStableLane': adapterProviderIncludedInStableLane(provider),
+        'reasons': <String>[if (reason != null) reason],
+        'reason': reason,
+        'failureCount': 0,
+        'providerInfo': <String, Object?>{
+          if (health.serverName != null) 'serverName': health.serverName,
+          if (health.serverVersion != null) 'serverVersion': health.serverVersion,
+          if (health.command != null) 'command': health.command,
+          if (health.args.isNotEmpty) 'args': health.args,
+          if (provider.startupTimeoutMs > 0)
+            'startupTimeoutMs': provider.startupTimeoutMs,
+        },
+      };
+    }
+
     return <String, Object?>{
       'state': 'healthy',
       'healthy': true,
@@ -583,7 +751,17 @@ class AdapterRegistry {
 }
 
 const Map<String, List<String>> _builtinOperations = <String, List<String>>{
-  'delegate': <String>['analyze_project', 'resolve_symbol', 'pub_search'],
+  'delegate': <String>[
+    'analyze_project',
+    'resolve_symbol',
+    'pub_search',
+    'dependency_add',
+    'dependency_remove',
+    'get_runtime_errors',
+    'get_widget_tree',
+    'hot_reload',
+    'hot_restart',
+  ],
   'flutterCli': <String>[
     'device_list',
     'run_app',
@@ -617,6 +795,553 @@ const Map<String, List<String>> _builtinOperations = <String, List<String>>{
     'native_handoff_summary',
   ],
 };
+
+class _UnavailableDelegateAdapter implements DelegateAdapter {
+  _UnavailableDelegateAdapter({required this.reason});
+
+  final String reason;
+
+  @override
+  Future<DelegateHealth> health() async => DelegateHealth(
+    connected: false,
+    serverName: null,
+    serverVersion: null,
+    supportedOperations: const <String>[],
+    error: reason,
+  );
+
+  @override
+  Future<Map<String, Object?>> analyzeProject({
+    required String workspaceRoot,
+    required bool fatalInfos,
+    required bool fatalWarnings,
+  }) async {
+    throw StateError(reason);
+  }
+
+  @override
+  Future<Map<String, Object?>> dependencyAdd({
+    required String workspaceRoot,
+    required String package,
+    required String? versionConstraint,
+    required bool devDependency,
+  }) async {
+    throw StateError(reason);
+  }
+
+  @override
+  Future<Map<String, Object?>> dependencyRemove({
+    required String workspaceRoot,
+    required String package,
+  }) async {
+    throw StateError(reason);
+  }
+
+  @override
+  Future<Map<String, Object?>> getRuntimeErrors({
+    required String dtdUri,
+  }) async {
+    throw StateError(reason);
+  }
+
+  @override
+  Future<Map<String, Object?>> getWidgetTree({
+    required String dtdUri,
+    required int depth,
+    required bool includeProperties,
+  }) async {
+    throw StateError(reason);
+  }
+
+  @override
+  Future<void> hotReload({required String dtdUri}) async {
+    throw StateError(reason);
+  }
+
+  @override
+  Future<void> hotRestart({required String dtdUri}) async {
+    throw StateError(reason);
+  }
+
+  @override
+  Future<Map<String, Object?>> pubSearch({
+    required String query,
+    required int limit,
+  }) async {
+    throw StateError(reason);
+  }
+
+  @override
+  Future<Map<String, Object?>> resolveSymbol({
+    required String workspaceRoot,
+    required String symbol,
+  }) async {
+    throw StateError(reason);
+  }
+}
+
+class _StdioJsonDelegateAdapter implements DelegateAdapter {
+  _StdioJsonDelegateAdapter({required this.client});
+
+  final _StdioJsonProviderClient client;
+
+  @override
+  Future<DelegateHealth> health() async {
+    final payload = await client.health();
+    final families = _coerceMap(payload['families']);
+    final family = _coerceMap(families['delegate']);
+    final providerInfo = _coerceMap(payload['providerInfo']);
+    final state = payload['state'] as String?;
+    final healthy = (payload['healthy'] as bool? ?? false) &&
+        (family['healthy'] as bool? ?? false);
+    return DelegateHealth(
+      connected: healthy || state == 'healthy',
+      serverName: providerInfo['serverName'] as String? ?? providerInfo['name'] as String?,
+      serverVersion: providerInfo['serverVersion'] as String? ?? providerInfo['version'] as String?,
+      supportedOperations: _coerceStringList(family['operations']),
+      command: providerInfo['command'] as String?,
+      args: _coerceStringList(providerInfo['args']),
+      error: family['reason'] as String? ??
+          payload['reason'] as String? ??
+          _firstReason(payload['reasons']),
+    );
+  }
+
+  @override
+  Future<Map<String, Object?>> analyzeProject({
+    required String workspaceRoot,
+    required bool fatalInfos,
+    required bool fatalWarnings,
+  }) async {
+    return _invoke('analyze_project', <String, Object?>{
+      'workspaceRoot': workspaceRoot,
+      'fatalInfos': fatalInfos,
+      'fatalWarnings': fatalWarnings,
+    });
+  }
+
+  @override
+  Future<Map<String, Object?>> resolveSymbol({
+    required String workspaceRoot,
+    required String symbol,
+  }) async {
+    return _invoke('resolve_symbol', <String, Object?>{
+      'workspaceRoot': workspaceRoot,
+      'symbol': symbol,
+    });
+  }
+
+  @override
+  Future<Map<String, Object?>> pubSearch({
+    required String query,
+    required int limit,
+  }) async {
+    return _invoke('pub_search', <String, Object?>{
+      'query': query,
+      'limit': limit,
+    });
+  }
+
+  @override
+  Future<Map<String, Object?>> dependencyAdd({
+    required String workspaceRoot,
+    required String package,
+    required String? versionConstraint,
+    required bool devDependency,
+  }) async {
+    return _invoke('dependency_add', <String, Object?>{
+      'workspaceRoot': workspaceRoot,
+      'package': package,
+      if (versionConstraint != null) 'versionConstraint': versionConstraint,
+      'devDependency': devDependency,
+    });
+  }
+
+  @override
+  Future<Map<String, Object?>> dependencyRemove({
+    required String workspaceRoot,
+    required String package,
+  }) async {
+    return _invoke('dependency_remove', <String, Object?>{
+      'workspaceRoot': workspaceRoot,
+      'package': package,
+    });
+  }
+
+  @override
+  Future<Map<String, Object?>> getRuntimeErrors({
+    required String dtdUri,
+  }) async {
+    return _invoke('get_runtime_errors', <String, Object?>{'dtdUri': dtdUri});
+  }
+
+  @override
+  Future<Map<String, Object?>> getWidgetTree({
+    required String dtdUri,
+    required int depth,
+    required bool includeProperties,
+  }) async {
+    return _invoke('get_widget_tree', <String, Object?>{
+      'dtdUri': dtdUri,
+      'depth': depth,
+      'includeProperties': includeProperties,
+    });
+  }
+
+  @override
+  Future<void> hotReload({required String dtdUri}) async {
+    await _invoke('hot_reload', <String, Object?>{'dtdUri': dtdUri});
+  }
+
+  @override
+  Future<void> hotRestart({required String dtdUri}) async {
+    await _invoke('hot_restart', <String, Object?>{'dtdUri': dtdUri});
+  }
+
+  Future<Map<String, Object?>> _invoke(
+    String operation,
+    Map<String, Object?> input,
+  ) async {
+    final payload = await client.invoke(
+      family: 'delegate',
+      operation: operation,
+      input: input,
+    );
+    return _coerceMap(payload);
+  }
+}
+
+class _BuiltinFlutterMcpDelegateAdapter implements DelegateAdapter {
+  _BuiltinFlutterMcpDelegateAdapter({
+    required this.command,
+    required this.args,
+    required this.startupTimeout,
+    this.observability,
+  });
+
+  final String command;
+  final List<String> args;
+  final Duration startupTimeout;
+  final ObservabilityStore? observability;
+  _McpConnection? _connection;
+  final Set<String> _registeredRoots = <String>{};
+  String? _lastError;
+
+  static const Duration _addRootsTimeout = Duration(seconds: 5);
+  static const Duration _resolveSymbolTimeout = Duration(seconds: 20);
+  static const Duration _pubSearchTimeout = Duration(seconds: 20);
+  static const Duration _runtimeDelegateTimeout = Duration(seconds: 10);
+  static const Duration _analyzeProjectTimeout = Duration(seconds: 60);
+  static const Duration _dependencyMutationTimeout = Duration(seconds: 30);
+
+  @override
+  Future<DelegateHealth> health() async {
+    try {
+      final connection = await _ensureConnection();
+      final supportedOperations = _builtinOperations['delegate'] ?? const <String>[];
+      return DelegateHealth(
+        connected: true,
+        serverName: connection.serverName,
+        serverVersion: connection.serverVersion,
+        supportedOperations: supportedOperations,
+        command: command,
+        args: args,
+      );
+    } on Object catch (error) {
+      _lastError = error.toString();
+      return DelegateHealth(
+        connected: false,
+        serverName: null,
+        serverVersion: null,
+        supportedOperations: const <String>[],
+        command: command,
+        args: args,
+        error: _lastError,
+      );
+    }
+  }
+
+  @override
+  Future<Map<String, Object?>> analyzeProject({
+    required String workspaceRoot,
+    required bool fatalInfos,
+    required bool fatalWarnings,
+  }) async {
+    final startedAt = DateTime.now().toUtc();
+    await _ensureRootRegistered(workspaceRoot);
+    final result = await _callTool(
+      toolName: 'analyze_files',
+      arguments: <String, Object?>{
+        'roots': <Map<String, Object?>>[
+          <String, Object?>{'root': _workspaceRootUri(workspaceRoot)},
+        ],
+      },
+      timeout: _analyzeProjectTimeout,
+      operation: 'analyze_project',
+    );
+    return _normalizeAnalyzeProjectResult(
+      workspaceRoot: workspaceRoot,
+      result: result,
+      duration: DateTime.now().toUtc().difference(startedAt),
+    );
+  }
+
+  @override
+  Future<Map<String, Object?>> resolveSymbol({
+    required String workspaceRoot,
+    required String symbol,
+  }) async {
+    await _ensureRootRegistered(workspaceRoot);
+    final result = await _callTool(
+      toolName: 'resolve_workspace_symbol',
+      arguments: <String, Object?>{'query': symbol},
+      timeout: _resolveSymbolTimeout,
+      operation: 'resolve_symbol',
+    );
+    return _normalizeResolveSymbolResult(
+      result: result,
+      workspaceRoot: workspaceRoot,
+      symbol: symbol,
+    );
+  }
+
+  @override
+  Future<Map<String, Object?>> pubSearch({
+    required String query,
+    required int limit,
+  }) async {
+    final result = await _callTool(
+      toolName: 'pub_dev_search',
+      arguments: <String, Object?>{'query': query},
+      timeout: _pubSearchTimeout,
+      operation: 'pub_search',
+    );
+    return _normalizePubSearchResult(result: result, query: query, limit: limit);
+  }
+
+  @override
+  Future<Map<String, Object?>> dependencyAdd({
+    required String workspaceRoot,
+    required String package,
+    required String? versionConstraint,
+    required bool devDependency,
+  }) async {
+    await _ensureRootRegistered(workspaceRoot);
+    final descriptorPrefix = devDependency ? 'dev:' : '';
+    final descriptor = versionConstraint == null || versionConstraint.isEmpty
+        ? '$descriptorPrefix$package'
+        : '$descriptorPrefix$package:$versionConstraint';
+    final result = await _callTool(
+      toolName: 'pub',
+      arguments: <String, Object?>{
+        'command': 'add',
+        'packageNames': <String>[descriptor],
+        'roots': <Map<String, Object?>>[
+          <String, Object?>{'root': _workspaceRootUri(workspaceRoot)},
+        ],
+      },
+      timeout: _dependencyMutationTimeout,
+      operation: 'dependency_add',
+    );
+    return <String, Object?>{
+      'stdout': _stringifyToolResult(result),
+      'stderr': '',
+      'exitCode': 0,
+    };
+  }
+
+  @override
+  Future<Map<String, Object?>> dependencyRemove({
+    required String workspaceRoot,
+    required String package,
+  }) async {
+    await _ensureRootRegistered(workspaceRoot);
+    final result = await _callTool(
+      toolName: 'pub',
+      arguments: <String, Object?>{
+        'command': 'remove',
+        'packageNames': <String>[package],
+        'roots': <Map<String, Object?>>[
+          <String, Object?>{'root': _workspaceRootUri(workspaceRoot)},
+        ],
+      },
+      timeout: _dependencyMutationTimeout,
+      operation: 'dependency_remove',
+    );
+    return <String, Object?>{
+      'stdout': _stringifyToolResult(result),
+      'stderr': '',
+      'exitCode': 0,
+    };
+  }
+
+  @override
+  Future<Map<String, Object?>> getRuntimeErrors({
+    required String dtdUri,
+  }) async {
+    await _connectDtd(dtdUri);
+    final result = await _callTool(
+      toolName: 'get_runtime_errors',
+      arguments: const <String, Object?>{},
+      timeout: _runtimeDelegateTimeout,
+      operation: 'get_runtime_errors',
+    );
+    return <String, Object?>{
+      'errors': _normalizeRuntimeErrors(result),
+    };
+  }
+
+  @override
+  Future<Map<String, Object?>> getWidgetTree({
+    required String dtdUri,
+    required int depth,
+    required bool includeProperties,
+  }) async {
+    await _connectDtd(dtdUri);
+    final result = await _callTool(
+      toolName: 'get_widget_tree',
+      arguments: <String, Object?>{
+        'summaryOnly': !includeProperties,
+      },
+      timeout: _runtimeDelegateTimeout,
+      operation: 'get_widget_tree',
+    );
+    return <String, Object?>{
+      'tree': _normalizeWidgetTree(result, depth: depth),
+    };
+  }
+
+  @override
+  Future<void> hotReload({required String dtdUri}) async {
+    await _connectDtd(dtdUri);
+    await _callTool(
+      toolName: 'hot_reload',
+      arguments: const <String, Object?>{
+        'clearRuntimeErrors': false,
+      },
+      timeout: _runtimeDelegateTimeout,
+      operation: 'hot_reload',
+    );
+  }
+
+  @override
+  Future<void> hotRestart({required String dtdUri}) async {
+    await _connectDtd(dtdUri);
+    await _callTool(
+      toolName: 'hot_restart',
+      arguments: const <String, Object?>{},
+      timeout: _runtimeDelegateTimeout,
+      operation: 'hot_restart',
+    );
+  }
+
+  Future<_McpConnection> _ensureConnection() async {
+    final existing = _connection;
+    if (existing != null && existing.connected) {
+      return existing;
+    }
+    final connection = await _McpConnection.start(
+      command: command,
+      args: args,
+      startupTimeout: startupTimeout,
+      clientName: 'flutterhelm-delegate',
+      exitErrorLabel: 'Official Flutter MCP delegate exited.',
+    );
+    _connection = connection;
+    _lastError = null;
+    _registeredRoots.clear();
+    return connection;
+  }
+
+  Future<void> _ensureRootRegistered(String workspaceRoot) async {
+    final uri = _workspaceRootUri(workspaceRoot);
+    if (_registeredRoots.contains(uri)) {
+      return;
+    }
+    await _callTool(
+      toolName: 'add_roots',
+      arguments: <String, Object?>{
+        'roots': <Map<String, Object?>>[
+          <String, Object?>{
+            'uri': uri,
+            'name': p.basename(workspaceRoot),
+          },
+        ],
+      },
+      timeout: _addRootsTimeout,
+      operation: 'add_roots',
+    );
+    _registeredRoots.add(uri);
+  }
+
+  Future<void> _connectDtd(String dtdUri) async {
+    await _callTool(
+      toolName: 'connect_dart_tooling_daemon',
+      arguments: <String, Object?>{'uri': dtdUri},
+      timeout: _runtimeDelegateTimeout,
+      operation: 'connect_dart_tooling_daemon',
+    );
+  }
+
+  Future<Map<String, Object?>> _callTool({
+    required String toolName,
+    required Map<String, Object?> arguments,
+    required Duration timeout,
+    required String operation,
+  }) async {
+    final startedAt = DateTime.now().toUtc();
+    try {
+      final connection = await _ensureConnection();
+      final result = await connection.request(
+        'tools/call',
+        <String, Object?>{
+          'name': toolName,
+          'arguments': arguments,
+        },
+        timeoutOverride: timeout,
+      );
+      if (result['isError'] == true) {
+        throw StateError(
+          _stringifyToolResult(result).isEmpty
+              ? 'Official delegate tool call failed: $toolName'
+              : _stringifyToolResult(result),
+        );
+      }
+      observability?.recordAdapterInvocation(
+        providerId: 'builtin.delegate.workspace',
+        family: 'delegate',
+        operation: operation,
+        duration: DateTime.now().toUtc().difference(startedAt),
+        success: true,
+      );
+      return result;
+    } on Object catch (error) {
+      _recordFailure(error);
+      observability?.recordAdapterInvocation(
+        providerId: 'builtin.delegate.workspace',
+        family: 'delegate',
+        operation: operation,
+        duration: DateTime.now().toUtc().difference(startedAt),
+        success: false,
+      );
+      rethrow;
+    }
+  }
+
+  void _recordFailure(Object error) {
+    _lastError = error.toString();
+    final connection = _connection;
+    _connection = null;
+    _registeredRoots.clear();
+    if (connection != null && connection.connected) {
+      connection.process.kill(ProcessSignal.sigkill);
+    }
+  }
+
+  String _workspaceRootUri(String workspaceRoot) {
+    return Directory(workspaceRoot).absolute.uri.toString();
+  }
+}
 
 class _UnavailableRuntimeDriverAdapter implements RuntimeDriverAdapter {
   _UnavailableRuntimeDriverAdapter({required this.reason});
@@ -1417,6 +2142,7 @@ class _McpConnection {
   _McpConnection._({
     required this.process,
     required this.startupTimeout,
+    required this.exitErrorLabel,
   }) {
     process.stdout
         .transform(utf8.decoder)
@@ -1434,7 +2160,7 @@ class _McpConnection {
       _pendingRequests.clear();
       for (final completer in pending.values) {
         if (!completer.isCompleted) {
-          completer.completeError(StateError('Runtime driver exited.'));
+          completer.completeError(StateError(exitErrorLabel));
         }
       }
     });
@@ -1442,6 +2168,7 @@ class _McpConnection {
 
   final Process process;
   final Duration startupTimeout;
+  final String exitErrorLabel;
   String serverName = 'runtime-driver';
   String? serverVersion;
   Set<String> toolNames = <String>{};
@@ -1456,11 +2183,14 @@ class _McpConnection {
     required String command,
     required List<String> args,
     required Duration startupTimeout,
+    String clientName = 'flutterhelm-runtime-driver',
+    String exitErrorLabel = 'MCP server exited.',
   }) async {
     final process = await Process.start(command, args);
     final connection = _McpConnection._(
       process: process,
       startupTimeout: startupTimeout,
+      exitErrorLabel: exitErrorLabel,
     );
     final initialize = await connection.request(
       'initialize',
@@ -1468,7 +2198,7 @@ class _McpConnection {
         'protocolVersion': '2025-06-18',
         'capabilities': <String, Object?>{},
         'clientInfo': <String, Object?>{
-          'name': 'flutterhelm-runtime-driver',
+          'name': clientName,
           'version': '0.1.0',
         },
       },
@@ -1557,6 +2287,372 @@ Object? _decodeToolPayload(Map<String, Object?> result) {
   } catch (_) {
     return joined;
   }
+}
+
+Map<String, Object?> _normalizeAnalyzeProjectResult({
+  required String workspaceRoot,
+  required Map<String, Object?> result,
+  required Duration duration,
+}) {
+  final diagnostics = _extractDiagnostics(result);
+  final stdout = _stringifyToolResult(result);
+  final exitCode = diagnostics.isEmpty ? 0 : 1;
+  return <String, Object?>{
+    'workspaceRoot': workspaceRoot,
+    'exitCode': exitCode,
+    'issueCount': diagnostics.length,
+    'durationMs': duration.inMilliseconds,
+    'status': exitCode == 0 ? 'ok' : 'issues_found',
+    'stdout': stdout,
+    'stderr': '',
+  };
+}
+
+Map<String, Object?> _normalizeResolveSymbolResult({
+  required Map<String, Object?> result,
+  required String workspaceRoot,
+  required String symbol,
+}) {
+  final matches = _collectSymbolMatches(result, symbol, workspaceRoot);
+  return <String, Object?>{
+    'symbol': symbol,
+    'matches': matches,
+    'resolved': matches.isNotEmpty,
+  };
+}
+
+Map<String, Object?> _normalizePubSearchResult({
+  required Map<String, Object?> result,
+  required String query,
+  required int limit,
+}) {
+  final packages = <Map<String, Object?>>[];
+  for (final item in _contentPayloads(result)) {
+    final decoded = _decodeSinglePayload(item);
+    final object = _coerceMap(decoded);
+    if (object.isEmpty) {
+      continue;
+    }
+    final packageName = _stringValue(object['package']) ??
+        _stringValue(object['packageName']);
+    if (packageName == null) {
+      continue;
+    }
+    packages.add(<String, Object?>{
+      'package': packageName,
+      'latestVersion': _stringValue(object['latestVersion']) ??
+          _stringValue(object['latest_version']) ??
+          _stringValue(object['version']),
+      'description': _stringValue(object['description']) ?? '',
+      'url': _stringValue(object['url']) ?? 'https://pub.dev/packages/$packageName',
+      if (_stringValue(object['publisher']) != null)
+        'publisher': _stringValue(object['publisher']),
+      if (_stringValue(object['publisherId']) != null)
+        'publisher': _stringValue(object['publisherId']),
+    });
+    if (packages.length >= limit) {
+      break;
+    }
+  }
+  if (packages.isEmpty) {
+    throw StateError(
+      'Official delegate returned an unexpected pub_dev_search payload.',
+    );
+  }
+  return <String, Object?>{
+    'query': query,
+    'packages': packages,
+  };
+}
+
+List<Map<String, Object?>> _normalizeRuntimeErrors(Map<String, Object?> result) {
+  final container = _decodeStructuredPayload(result);
+  final candidates = <Object?>[];
+  if (container is List) {
+    candidates.addAll(container);
+  } else {
+    final object = _coerceMap(container);
+    if (object['errors'] is List) {
+      candidates.addAll(_coerceList(object['errors']));
+    } else if (object['runtimeErrors'] is List) {
+      candidates.addAll(_coerceList(object['runtimeErrors']));
+    } else if (object.isNotEmpty) {
+      candidates.add(object);
+    }
+  }
+  final errors = <Map<String, Object?>>[];
+  for (final candidate in candidates) {
+    final object = _coerceMap(candidate);
+    if (object.isEmpty) {
+      final text = candidate is String ? candidate.trim() : '';
+      if (text.isEmpty) {
+        continue;
+      }
+      errors.add(<String, Object?>{
+        'kind': 'runtime_error',
+        'summary': text,
+      });
+      continue;
+    }
+    final summary = _stringValue(object['summary']) ??
+        _stringValue(object['message']) ??
+        _stringValue(object['description']) ??
+        _stringValue(object['text']);
+    if (summary == null) {
+      continue;
+    }
+    errors.add(<String, Object?>{
+      'kind': _stringValue(object['kind']) ??
+          _stringValue(object['type']) ??
+          'runtime_error',
+      'summary': summary,
+      if (_stringValue(object['category']) != null)
+        'category': _stringValue(object['category']),
+      if (_intValue(object['line']) != null) 'line': _intValue(object['line']),
+    });
+  }
+  return errors;
+}
+
+Map<String, Object?> _normalizeWidgetTree(
+  Map<String, Object?> result, {
+  required int depth,
+}) {
+  final decoded = _decodeStructuredPayload(result);
+  final tree = _resolveWidgetTreeRoot(decoded);
+  if (tree.isEmpty) {
+    throw StateError(
+      'Official delegate returned an unexpected widget tree payload.',
+    );
+  }
+  return _trimWidgetTree(tree, depth);
+}
+
+List<Map<String, Object?>> _extractDiagnostics(Map<String, Object?> result) {
+  final decoded = _decodeStructuredPayload(result);
+  final diagnostics = <Map<String, Object?>>[];
+  void visit(Object? node) {
+    if (node is List) {
+      for (final item in node) {
+        visit(item);
+      }
+      return;
+    }
+    final object = _coerceMap(node);
+    if (object.isEmpty) {
+      return;
+    }
+    final hasMessage = _stringValue(object['message']) != null ||
+        _stringValue(object['problemMessage']) != null;
+    final hasLocation = object['location'] != null ||
+        object['line'] != null ||
+        object['file'] != null ||
+        object['path'] != null;
+    if (hasMessage && hasLocation) {
+      diagnostics.add(object);
+    }
+    for (final value in object.values) {
+      visit(value);
+    }
+  }
+
+  visit(decoded);
+  return diagnostics;
+}
+
+List<Map<String, Object?>> _collectSymbolMatches(
+  Map<String, Object?> result,
+  String symbol,
+  String workspaceRoot,
+) {
+  final decoded = _decodeStructuredPayload(result);
+  final matches = <Map<String, Object?>>[];
+
+  void visit(Object? node) {
+    if (node is List) {
+      for (final item in node) {
+        visit(item);
+      }
+      return;
+    }
+    final object = _coerceMap(node);
+    if (object.isEmpty) {
+      return;
+    }
+    final path = _extractPathLikeValue(object);
+    final snippet = _stringValue(object['snippet']) ??
+        _stringValue(object['declaration']) ??
+        _stringValue(object['signature']) ??
+        _stringValue(object['label']) ??
+        _stringValue(object['name']);
+    final candidateName = _stringValue(object['name']) ??
+        _stringValue(object['symbol']) ??
+        _stringValue(object['label']);
+    if (path != null &&
+        (snippet?.contains(symbol) == true || candidateName == symbol)) {
+      matches.add(<String, Object?>{
+        'symbol': symbol,
+        'path': path,
+        'line': _intValue(object['line']) ?? 1,
+        'column': _intValue(object['column']) ?? 1,
+        'snippet': snippet ?? symbol,
+      });
+    }
+    for (final value in object.values) {
+      visit(value);
+    }
+  }
+
+  visit(decoded);
+  if (matches.isEmpty) {
+    return const <Map<String, Object?>>[];
+  }
+  final normalizedWorkspaceRoot = p.normalize(workspaceRoot);
+  matches.sort((left, right) {
+    final leftPath = p.normalize(left['path'] as String);
+    final rightPath = p.normalize(right['path'] as String);
+    final leftScore = p.isWithin(normalizedWorkspaceRoot, leftPath) ? 0 : 1;
+    final rightScore = p.isWithin(normalizedWorkspaceRoot, rightPath) ? 0 : 1;
+    if (leftScore != rightScore) {
+      return leftScore.compareTo(rightScore);
+    }
+    final pathCompare = leftPath.compareTo(rightPath);
+    if (pathCompare != 0) {
+      return pathCompare;
+    }
+    return ((left['line'] as int?) ?? 0).compareTo(
+      (right['line'] as int?) ?? 0,
+    );
+  });
+  final seen = <String>{};
+  return <Map<String, Object?>>[
+    for (final match in matches)
+      if (seen.add(
+        '${match['path']}:${match['line']}:${match['column']}:${match['snippet']}',
+      ))
+        match,
+  ];
+}
+
+Object? _decodeStructuredPayload(Map<String, Object?> result) {
+  final payloads = _contentPayloads(result);
+  if (payloads.isEmpty) {
+    return _decodeToolPayload(result);
+  }
+  if (payloads.length == 1) {
+    return _decodeSinglePayload(payloads.single);
+  }
+  final decodedItems = payloads.map(_decodeSinglePayload).toList();
+  if (decodedItems.every((Object? item) => item is Map || item is List)) {
+    return decodedItems;
+  }
+  return decodedItems;
+}
+
+List<Map<String, Object?>> _contentPayloads(Map<String, Object?> result) {
+  final content = _coerceList(result['content']);
+  return content
+      .map(_coerceMap)
+      .where((Map<String, Object?> item) {
+        return item['text'] is String &&
+            (item['text'] as String).trim().isNotEmpty;
+      })
+      .toList();
+}
+
+Object? _decodeSinglePayload(Map<String, Object?> payload) {
+  final text = _stringValue(payload['text']);
+  if (text == null) {
+    return payload;
+  }
+  try {
+    return jsonDecode(text);
+  } catch (_) {
+    return text;
+  }
+}
+
+String _stringifyToolResult(Map<String, Object?> result) {
+  final texts = _contentPayloads(result)
+      .map((Map<String, Object?> item) => item['text'] as String)
+      .where((String text) => text.trim().isNotEmpty)
+      .toList();
+  if (texts.isNotEmpty) {
+    return texts.join('\n').trim();
+  }
+  final decoded = _decodeToolPayload(result);
+  if (decoded is String) {
+    return decoded;
+  }
+  return const JsonEncoder.withIndent('  ').convert(decoded);
+}
+
+String? _extractPathLikeValue(Map<String, Object?> object) {
+  final directPath = _stringValue(object['path']) ??
+      _stringValue(object['file']) ??
+      _stringValue(object['filePath']);
+  if (directPath != null) {
+    return directPath;
+  }
+  final uri = _stringValue(object['uri']);
+  if (uri != null && uri.startsWith('file:')) {
+    return Uri.parse(uri).toFilePath();
+  }
+  final location = _coerceMap(object['location']);
+  final locationUri = _stringValue(location['uri']);
+  if (locationUri != null && locationUri.startsWith('file:')) {
+    return Uri.parse(locationUri).toFilePath();
+  }
+  return _stringValue(location['path']) ??
+      _stringValue(location['file']) ??
+      _stringValue(location['filePath']);
+}
+
+Map<String, Object?> _resolveWidgetTreeRoot(Object? decoded) {
+  if (decoded is Map<String, Object?> && decoded.isNotEmpty) {
+    if (decoded.containsKey('tree')) {
+      return _coerceMap(decoded['tree']);
+    }
+    if (decoded.containsKey('root')) {
+      return _coerceMap(decoded['root']);
+    }
+    if (decoded.containsKey('widgetTree')) {
+      return _coerceMap(decoded['widgetTree']);
+    }
+    return decoded;
+  }
+  if (decoded is List && decoded.isNotEmpty) {
+    for (final item in decoded) {
+      final object = _resolveWidgetTreeRoot(item);
+      if (object.isNotEmpty) {
+        return object;
+      }
+    }
+  }
+  return <String, Object?>{};
+}
+
+Map<String, Object?> _trimWidgetTree(Map<String, Object?> node, int depth) {
+  if (depth <= 1) {
+    return <String, Object?>{
+      for (final entry in node.entries)
+        if (entry.key != 'children' && entry.key != 'properties')
+          entry.key: entry.value,
+      'children': const <Object?>[],
+    };
+  }
+  final children = node['children'];
+  final trimmedChildren = <Map<String, Object?>>[];
+  if (children is List) {
+    for (final child in children) {
+      trimmedChildren.add(_trimWidgetTree(_coerceMap(child), depth - 1));
+    }
+  }
+  return <String, Object?>{
+    for (final entry in node.entries)
+      if (entry.key != 'children') entry.key: entry.value,
+    'children': trimmedChildren,
+  };
 }
 
 Object? _decodeEmbeddedJson(String text) {

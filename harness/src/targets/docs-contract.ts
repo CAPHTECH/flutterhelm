@@ -45,7 +45,9 @@ type CheckName =
   | "phase6-hardening-flow"
   | "phase6-ecosystem-docs"
   | "phase6-ecosystem-flow"
-  | "phase16-native-build-docs";
+  | "phase16-native-build-docs"
+  | "phase17-delegate-docs"
+  | "phase17-delegate-flow";
 
 interface ContractCaseInput {
   checks?: CheckName[];
@@ -135,14 +137,22 @@ class Phase0HarnessClient {
     return result;
   }
 
-  async callTool(name: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  async callTool(
+    name: string,
+    args: Record<string, unknown> = {},
+    timeoutMs?: number,
+  ): Promise<Record<string, unknown>> {
     return this.request("tools/call", {
       name,
       arguments: args,
-    });
+    }, timeoutMs);
   }
 
-  async request(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  async request(
+    method: string,
+    params: Record<string, unknown> = {},
+    timeoutMs?: number,
+  ): Promise<Record<string, unknown>> {
     const id = `client-${this.nextRequestId++}`;
     const promise = new Promise<Record<string, unknown>>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -153,7 +163,25 @@ class Phase0HarnessClient {
       method,
       params,
     });
-    return promise;
+    if (timeoutMs === undefined) {
+      return promise;
+    }
+    return new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Request timed out after ${timeoutMs}ms: ${method}`));
+      }, timeoutMs);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
   }
 
   notify(method: string, params: Record<string, unknown> = {}): void {
@@ -1874,6 +1902,7 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
     "smoke",
     "contracts",
     "hardening",
+    "delegate",
     "runtime",
     "profiling",
     "bridge",
@@ -1890,6 +1919,7 @@ async function checkPhase6HardeningDocs(repoRoot: string): Promise<void> {
     "contracts",
     "hardening",
     "ecosystem",
+    "delegate",
     "runtime",
     "profiling",
     "bridge",
@@ -2529,7 +2559,7 @@ async function checkPhase16NativeBuildDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "README.md",
     [
-      "Sprint 16 では native build orchestration の beta wave",
+      "Sprint 16 では native build orchestration の beta wave を追加しました",
       "`native_build` workflow",
       "`nativeBuild` adapter family",
       "`native-build` harness lane",
@@ -2589,7 +2619,7 @@ async function checkPhase16NativeBuildDocs(repoRoot: string): Promise<void> {
     "docs/10-migration-notes.md",
     [
       "Sprint 16 beta wave",
-      "`native_build` is beta",
+      "native build orchestration を beta として追加しました",
       "`nativeBuild`",
       "`native-build`",
     ],
@@ -2599,7 +2629,7 @@ async function checkPhase16NativeBuildDocs(repoRoot: string): Promise<void> {
     repoRoot,
     "docs/11-user-guide.md",
     [
-      "Sprint 16 planned beta",
+      "### 9.3 `native_build` (beta)",
       "`native_build` workflow",
       "`nativeBuild` adapter family",
       "`native-build` harness lane",
@@ -2626,6 +2656,183 @@ async function checkPhase16NativeBuildDocs(repoRoot: string): Promise<void> {
   if (!betaScript.includes("native-build")) {
     throw new Error(`harness beta script is missing native-build: ${betaScript}`);
   }
+}
+
+async function checkPhase17DelegateDocs(repoRoot: string): Promise<void> {
+  await checkRequiredStrings(
+    repoRoot,
+    "README.md",
+    [
+      "Sprint 17 では built-in delegate を official Flutter MCP first に切り替え",
+      "`delegate` は official Flutter MCP first",
+      "pnpm -C harness delegate",
+    ],
+    "README delegate docs",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/03-architecture.md",
+    [
+      "official Flutter MCP を primary delegate",
+      "fallback",
+    ],
+    "Architecture delegate docs",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/04-mcp-contract.md",
+    [
+      "Sprint 17: official delegate first",
+      "provider id は `builtin.delegate.workspace`",
+      "official delegate unavailable / timeout / malformed payload / DTD connect failure の場合は current backend に fallback",
+    ],
+    "MCP contract delegate docs",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/09-implementation-plan.md",
+    [
+      "### Sprint 17",
+      "official Flutter MCP as the primary backend",
+      "`delegate` harness lane",
+    ],
+    "Implementation plan delegate docs",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/10-migration-notes.md",
+    [
+      "Sprint 17 official delegate wave",
+      "primary backend は `dart mcp-server --tools all --force-roots-fallback`",
+      "current backend に fallback",
+    ],
+    "Migration notes delegate docs",
+  );
+  await checkRequiredStrings(
+    repoRoot,
+    "docs/11-user-guide.md",
+    [
+      "stable lane の diagnostics は built-in delegate を通して official Flutter MCP を優先利用します",
+    ],
+    "User guide delegate docs",
+  );
+
+  const harnessPackage = JSON.parse(await readRepoText(repoRoot, "harness/package.json")) as {
+    scripts?: Record<string, string>;
+  };
+  const delegateScript = harnessPackage.scripts?.delegate;
+  const stableScript = harnessPackage.scripts?.stable;
+  const betaScript = harnessPackage.scripts?.beta;
+  if (!delegateScript) {
+    throw new Error("harness/package.json is missing delegate script");
+  }
+  for (const expected of ["build", "validate", "run -- --tag delegate"]) {
+    if (!delegateScript.includes(expected)) {
+      throw new Error(`harness delegate script is missing ${expected}: ${delegateScript}`);
+    }
+  }
+  if (!stableScript || !stableScript.includes("delegate")) {
+    throw new Error(`harness stable script is missing delegate: ${String(stableScript)}`);
+  }
+  if (!betaScript || !betaScript.includes("delegate")) {
+    throw new Error(`harness beta script is missing delegate: ${String(betaScript)}`);
+  }
+}
+
+async function checkPhase17DelegateFlow(repoRoot: string): Promise<void> {
+  await withSampleAppClient(repoRoot, async (fixture, client) => {
+    await client.initialize();
+    await client.callTool("workspace_set_root", {
+      workspaceRoot: fixture.workspaceRoot,
+    });
+
+    const adaptersList = await client.callTool("adapter_list", {
+      family: "delegate",
+    });
+    const adaptersStructured = requireObject(
+      adaptersList.structuredContent,
+      "adapter_list(delegate).structuredContent",
+    );
+    const adapters = requireArray(adaptersStructured.adapters, "adapter_list(delegate).adapters")
+      .map((value) => requireObject(value, "delegate adapter"));
+    if (adapters.length !== 1) {
+      throw new Error(`adapter_list(family=delegate) returned ${adapters.length} entries`);
+    }
+    const delegate = adapters[0];
+    if (delegate.family !== "delegate") {
+      throw new Error(`Unexpected delegate family payload: ${JSON.stringify(delegate)}`);
+    }
+    if (delegate.activeProviderId !== "builtin.delegate.workspace") {
+      throw new Error(`Unexpected delegate provider id: ${JSON.stringify(delegate)}`);
+    }
+    if (delegate.healthy !== true) {
+      throw new Error(`Delegate should be healthy in the default environment: ${JSON.stringify(delegate)}`);
+    }
+    const operations = requireArray(delegate.operations, "delegate.operations");
+    for (const expected of ["analyze_project", "resolve_symbol", "pub_search", "hot_reload", "hot_restart"]) {
+      if (!operations.includes(expected)) {
+        throw new Error(`delegate.operations is missing ${expected}`);
+      }
+    }
+
+    const compatibility = await client.callTool("compatibility_check", {});
+    const compatibilityStructured = requireObject(
+      compatibility.structuredContent,
+      "compatibility_check.structuredContent",
+    );
+    const compatibilityDelegate = requireObject(
+      requireObject(compatibilityStructured.checks, "compatibility.checks").delegate,
+      "compatibility.checks.delegate",
+    );
+    if (compatibilityDelegate.status !== "ok") {
+      throw new Error(`compatibility_check.delegate should be ok: ${JSON.stringify(compatibilityDelegate)}`);
+    }
+
+    const pubSearch = await client.callTool("pub_search", {
+      query: "async",
+      limit: 3,
+    }, 30000);
+    const pubSearchStructured = requireObject(
+      pubSearch.structuredContent,
+      "pub_search.structuredContent",
+    );
+    const packages = requireArray(pubSearchStructured.packages, "pub_search.packages");
+    if (packages.length === 0) {
+      throw new Error("pub_search returned no packages");
+    }
+
+    const analysis = await client.callTool("analyze_project", {}, 90000);
+    const analysisStructured = requireObject(
+      analysis.structuredContent,
+      "analyze_project.structuredContent",
+    );
+    if (typeof analysisStructured.issueCount !== "number") {
+      throw new Error(`analyze_project issueCount should be numeric: ${JSON.stringify(analysisStructured)}`);
+    }
+
+    const adaptersResource = await client.request("resources/read", {
+      uri: "config://adapters/current",
+    });
+    const adaptersContents = requireArray(
+      adaptersResource.contents,
+      "config://adapters/current contents",
+    );
+    const adaptersBody = requireObject(
+      adaptersContents[0],
+      "config://adapters/current body",
+    );
+    const adaptersDecoded = JSON.parse(
+      requireString(adaptersBody.text, "config://adapters/current text"),
+    ) as Record<string, unknown>;
+    const providerStates = requireObject(adaptersDecoded.providerStates, "providerStates");
+    const builtinDelegate = requireObject(
+      providerStates["builtin.delegate.workspace"],
+      "builtin.delegate.workspace state",
+    );
+    if (builtinDelegate.healthy !== true) {
+      throw new Error(`builtin.delegate.workspace should be healthy: ${JSON.stringify(builtinDelegate)}`);
+    }
+  });
 }
 
 async function checkMkDocsBuild(repoRoot: string, harnessRoot: string): Promise<void> {
@@ -3034,6 +3241,8 @@ const CHECKS: Record<CheckName, (repoRoot: string, harnessRoot: string) => Promi
   "phase6-ecosystem-docs": (repoRoot) => checkPhase6EcosystemDocs(repoRoot),
   "phase6-ecosystem-flow": (repoRoot) => checkPhase6EcosystemFlow(repoRoot),
   "phase16-native-build-docs": (repoRoot) => checkPhase16NativeBuildDocs(repoRoot),
+  "phase17-delegate-docs": (repoRoot) => checkPhase17DelegateDocs(repoRoot),
+  "phase17-delegate-flow": (repoRoot) => checkPhase17DelegateFlow(repoRoot),
 };
 
 async function main(): Promise<void> {

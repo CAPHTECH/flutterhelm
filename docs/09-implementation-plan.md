@@ -459,6 +459,16 @@ Phase 6 の Sprint 12 ではさらに以下を追加します。
 - iOS-first native build / launch / runtime attach bridge
 - native build / device / summary resource surfaces
 
+### Sprint 17
+
+- built-in `delegate` provider uses official Flutter MCP as the primary backend
+- provider id remains `builtin.delegate.workspace`
+- `analyze_project`, `resolve_symbol`, `pub_search` move to official-first + fallback
+- `dependency_add` / `dependency_remove` keep approval replay and switch backend to official-first + fallback
+- `get_runtime_errors`, `get_widget_tree`, `hot_reload`, `hot_restart` use per-call DTD connect through the delegate before falling back
+- `delegate` family health is exposed through `adapter_list`, `config://adapters/current`, and `compatibility_check`
+- `delegate` harness lane validates official-first health and fallback-safe flow
+
 ## 6. Test strategy
 
 ## 6.1 Unit tests

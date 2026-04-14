@@ -12,14 +12,15 @@
     "smoke": "pnpm run bootstrap && pnpm run validate && pnpm run run -- --tag smoke",
     "contracts": "pnpm run build && pnpm run validate && pnpm run run -- --tag regression",
     "runtime": "pnpm run build && pnpm run validate && pnpm run run -- --tag runtime",
+    "delegate": "pnpm run build && pnpm run validate && pnpm run run -- --tag delegate",
     "profiling": "pnpm run build && pnpm run validate && pnpm run run -- --tag profiling",
     "bridge": "pnpm run build && pnpm run validate && pnpm run run -- --tag bridge",
     "interaction": "pnpm run build && pnpm run validate && pnpm run run -- --tag interaction",
     "hardening": "pnpm run build && pnpm run validate && pnpm run run -- --tag hardening",
     "ecosystem": "pnpm run build && pnpm run validate && pnpm run run -- --tag ecosystem",
     "native-build": "pnpm run build && pnpm run validate && pnpm run run -- --tag native-build",
-    "stable": "pnpm run smoke && pnpm run contracts && pnpm run hardening && pnpm run runtime && pnpm run profiling && pnpm run bridge",
-    "beta": "pnpm run smoke && pnpm run contracts && pnpm run hardening && pnpm run ecosystem && pnpm run runtime && pnpm run profiling && pnpm run bridge && pnpm run interaction && pnpm run native-build",
+    "stable": "pnpm run smoke && pnpm run contracts && pnpm run hardening && pnpm run delegate && pnpm run runtime && pnpm run profiling && pnpm run bridge",
+    "beta": "pnpm run smoke && pnpm run contracts && pnpm run hardening && pnpm run ecosystem && pnpm run delegate && pnpm run runtime && pnpm run profiling && pnpm run bridge && pnpm run interaction && pnpm run native-build",
     "qa": "pnpm run build && pnpm run validate && pnpm run run -- --tag edge && pnpm run run -- --tag adversarial"
   },
   "devDependencies": {

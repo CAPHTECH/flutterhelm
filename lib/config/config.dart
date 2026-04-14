@@ -235,6 +235,14 @@ class AdaptersConfig {
         kind: 'builtin',
         families: const <String>['delegate'],
         builtin: true,
+        command: 'dart',
+        args: const <String>[
+          'mcp-server',
+          '--tools',
+          'all',
+          '--force-roots-fallback',
+        ],
+        startupTimeoutMs: 10000,
         options: <String, Object?>{'type': delegateType},
       ),
       'builtin.flutter.cli': AdapterProviderConfig(

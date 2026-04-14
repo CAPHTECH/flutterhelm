@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutterhelm/adapters/registry.dart';
 import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/platform_bridge/support.dart';
 import 'package:flutterhelm/server/errors.dart';
@@ -20,6 +21,7 @@ class LauncherToolService {
     required this.artifactStore,
     required this.flutterExecutable,
     required this.appStateBuilder,
+    this.delegateAdapterFactory,
   });
 
   final ProcessRunner processRunner;
@@ -27,6 +29,7 @@ class LauncherToolService {
   final ArtifactStore artifactStore;
   final String flutterExecutable;
   final AppStateSnapshotBuilder appStateBuilder;
+  final Future<DelegateAdapter> Function()? delegateAdapterFactory;
 
   Future<List<Map<String, Object?>>> listDevices() async {
     final flutterDevices = await _flutterDevices();
@@ -465,6 +468,13 @@ class LauncherToolService {
         detailsResource: _healthResource(session.sessionId),
       );
     }
+    final delegateApplied = await _tryOfficialHotOperation(
+      dtdUri: handle.dtdUri,
+      fullRestart: fullRestart,
+    );
+    if (delegateApplied) {
+      return;
+    }
     await handle.sendMachineRequest('app.restart', <String, Object?>{
       'appId': session.appId,
       'fullRestart': fullRestart,
@@ -472,6 +482,31 @@ class LauncherToolService {
       'debounce': true,
       'reason': reason,
     });
+  }
+
+  Future<bool> _tryOfficialHotOperation({
+    required String? dtdUri,
+    required bool fullRestart,
+  }) async {
+    final factory = delegateAdapterFactory;
+    if (factory == null || dtdUri == null || dtdUri.isEmpty) {
+      return false;
+    }
+    try {
+      final adapter = await factory();
+      final health = await adapter.health();
+      if (!health.connected) {
+        return false;
+      }
+      if (fullRestart) {
+        await adapter.hotRestart(dtdUri: dtdUri);
+      } else {
+        await adapter.hotReload(dtdUri: dtdUri);
+      }
+      return true;
+    } on Object {
+      return false;
+    }
   }
 
   Future<List<Map<String, Object?>>> _flutterDevices() async {

@@ -196,6 +196,55 @@ adapters:
       expect(customState['supportLevel'], SupportLevel.beta.name);
       expect(customState['includedInStableLane'], isFalse);
     });
+
+    test('surfaces builtin delegate health from an official MCP-compatible server', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'flutterhelm-delegate-provider',
+      );
+      addTearDown(() => tempDir.delete(recursive: true));
+
+      final serverScript = await _writeDelegateServerScript(tempDir);
+      final config = FlutterHelmConfig.fromYamlText('''
+version: 1
+adapters:
+  active:
+    delegate: builtin.delegate.workspace
+  providers:
+    builtin.delegate.workspace:
+      kind: builtin
+      families:
+        - delegate
+      command: dart
+      args:
+        - run
+        - ${serverScript.path}
+      startupTimeoutMs: 2000
+''');
+      final registry = AdapterRegistry(
+        config: config,
+        processRunner: const ProcessRunner(),
+      );
+
+      final delegate = await registry.familyStatus('delegate');
+      expect(delegate.activeProviderId, 'builtin.delegate.workspace');
+      expect(delegate.healthy, isTrue);
+      expect(delegate.state, 'healthy');
+      expect(delegate.operations, contains('analyze_project'));
+      expect(delegate.operations, contains('get_widget_tree'));
+      expect(delegate.providerInfo?['serverName'], 'fake-dart-flutter-mcp');
+      expect(delegate.providerInfo?['serverVersion'], '9.9.9');
+
+      final currentResource = await registry.currentResource();
+      final providerStates =
+          currentResource['providerStates'] as Map<String, Object?>;
+      final builtinState =
+          providerStates['builtin.delegate.workspace'] as Map<String, Object?>;
+      expect(builtinState['healthy'], isTrue);
+      final providerInfo =
+          builtinState['providerInfo'] as Map<String, Object?>;
+      expect(providerInfo['serverName'], 'fake-dart-flutter-mcp');
+      expect(providerInfo['serverVersion'], '9.9.9');
+    });
   });
 }
 
@@ -204,6 +253,12 @@ Future<File> _writeProviderScript(
 ) async {
   final file = File(p.join(tempDir.path, 'temp_provider.dart'));
   await file.writeAsString(_providerScript);
+  return file;
+}
+
+Future<File> _writeDelegateServerScript(Directory tempDir) async {
+  final file = File(p.join(tempDir.path, 'fake_delegate_server.dart'));
+  await file.writeAsString(_delegateServerScript);
   return file;
 }
 
@@ -305,6 +360,61 @@ Future<void> main(List<String> args) async {
       }));
       await stdout.flush();
     }
+  }
+}
+''';
+
+const String _delegateServerScript = r'''
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+Future<void> main() async {
+  await for (final line in stdin.transform(utf8.decoder).transform(const LineSplitter())) {
+    final message = jsonDecode(line) as Map<String, Object?>;
+    final id = message['id'];
+    final method = message['method'] as String?;
+    if (method == 'initialize') {
+      stdout.writeln(jsonEncode(<String, Object?>{
+        'jsonrpc': '2.0',
+        'id': id,
+        'result': <String, Object?>{
+          'protocolVersion': '2025-06-18',
+          'serverInfo': <String, Object?>{
+            'name': 'fake-dart-flutter-mcp',
+            'version': '9.9.9',
+          },
+          'capabilities': <String, Object?>{},
+        },
+      }));
+      continue;
+    }
+    if (method == 'tools/list') {
+      stdout.writeln(jsonEncode(<String, Object?>{
+        'jsonrpc': '2.0',
+        'id': id,
+        'result': <String, Object?>{
+          'tools': <Map<String, Object?>>[
+            <String, Object?>{'name': 'add_roots'},
+            <String, Object?>{'name': 'analyze_files'},
+            <String, Object?>{'name': 'resolve_workspace_symbol'},
+            <String, Object?>{'name': 'pub_dev_search'},
+            <String, Object?>{'name': 'pub'},
+            <String, Object?>{'name': 'connect_dart_tooling_daemon'},
+            <String, Object?>{'name': 'get_runtime_errors'},
+            <String, Object?>{'name': 'get_widget_tree'},
+            <String, Object?>{'name': 'hot_reload'},
+            <String, Object?>{'name': 'hot_restart'},
+          ],
+        },
+      }));
+      continue;
+    }
+    stdout.writeln(jsonEncode(<String, Object?>{
+      'jsonrpc': '2.0',
+      'id': id,
+      'result': <String, Object?>{},
+    }));
   }
 }
 ''';

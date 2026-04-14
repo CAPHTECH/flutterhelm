@@ -275,6 +275,7 @@ class FlutterHelmServer {
         processRunner: processRunner,
         artifactStore: artifactStore,
         flutterExecutable: config.adapters.flutterExecutable,
+        delegateAdapterFactory: adapterRegistry.delegateAdapter,
       ),
       hardeningTools: hardeningTools,
       operationCoordinator: OperationCoordinator(),
@@ -285,11 +286,13 @@ class FlutterHelmServer {
         artifactStore: artifactStore,
         flutterExecutable: config.adapters.flutterExecutable,
         appStateBuilder: runtimeInteractionTools.appStateForSession,
+        delegateAdapterFactory: adapterRegistry.delegateAdapter,
       ),
       runtimeTools: RuntimeToolService(
         sessionStore: sessionStore,
         artifactStore: artifactStore,
         appStateBuilder: runtimeInteractionTools.appStateForSession,
+        delegateAdapterFactory: adapterRegistry.delegateAdapter,
       ),
       profilingTools: ProfilingToolService(
         sessionStore: sessionStore,

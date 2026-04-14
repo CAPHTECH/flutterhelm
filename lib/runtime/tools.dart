@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutterhelm/adapters/registry.dart';
 import 'package:flutterhelm/artifacts/resources.dart';
 import 'package:flutterhelm/artifacts/store.dart';
 import 'package:flutterhelm/server/errors.dart';
@@ -12,11 +13,13 @@ class RuntimeToolService {
     required this.sessionStore,
     required this.artifactStore,
     required this.appStateBuilder,
+    this.delegateAdapterFactory,
   });
 
   final SessionStore sessionStore;
   final ArtifactStore artifactStore;
   final SessionAppStatePayloadBuilder appStateBuilder;
+  final Future<DelegateAdapter> Function()? delegateAdapterFactory;
 
   Future<Map<String, Object?>> getLogs({
     required String sessionId,
@@ -57,12 +60,9 @@ class RuntimeToolService {
 
   Future<Map<String, Object?>> getRuntimeErrors({required String sessionId}) async {
     sessionStore.requireById(sessionId);
-    final stdout = await artifactStore.readStoredResource(artifactStore.sessionLogUri(sessionId, 'stdout'));
-    final stderr = await artifactStore.readStoredResource(artifactStore.sessionLogUri(sessionId, 'stderr'));
-    final errors = <Map<String, Object?>>[
-      ..._parseErrors(stdout?.text ?? '', 'stdout'),
-      ..._parseErrors(stderr?.text ?? '', 'stderr'),
-    ];
+    final delegateErrors = await _tryOfficialRuntimeErrors(sessionId);
+    final errors = delegateErrors ??
+        await _parseRuntimeErrorsFromLogs(sessionId);
     final payload = <String, Object?>{
       'sessionId': sessionId,
       'updatedAt': DateTime.now().toUtc().toIso8601String(),
@@ -101,6 +101,40 @@ class RuntimeToolService {
     required bool includeProperties,
   }) async {
     sessionStore.requireById(sessionId);
+    final delegateTree = await _tryOfficialWidgetTree(
+      sessionId: sessionId,
+      depth: depth,
+      includeProperties: includeProperties,
+    );
+    if (delegateTree != null) {
+      final payload = <String, Object?>{
+        'sessionId': sessionId,
+        'depth': depth,
+        'includeProperties': includeProperties,
+        'capturedAt': DateTime.now().toUtc().toIso8601String(),
+        'tree': delegateTree,
+      };
+      await artifactStore.writeSessionWidgetTree(
+        sessionId: sessionId,
+        depth: depth,
+        payload: payload,
+      );
+      return <String, Object?>{
+        'sessionId': sessionId,
+        'resource': <String, Object?>{
+          'uri': artifactStore.sessionWidgetTreeUri(sessionId, depth),
+          'mimeType': 'application/json',
+          'title': 'Widget tree snapshot',
+        },
+        'summary': <String, Object?>{
+          'rootWidget': (delegateTree['description'] as String?) ??
+              (delegateTree['name'] as String?) ??
+              'unknown',
+          'captureTime': payload['capturedAt'],
+          'depth': depth,
+        },
+      };
+    }
     final rawVmServiceUri = sessionStore.liveHandle(sessionId)?.vmServiceUri;
     if (rawVmServiceUri == null || rawVmServiceUri.isEmpty) {
       throw FlutterHelmToolError(
@@ -159,6 +193,73 @@ class RuntimeToolService {
     }
   }
 
+  Future<List<Map<String, Object?>>> _parseRuntimeErrorsFromLogs(
+    String sessionId,
+  ) async {
+    final stdout = await artifactStore.readStoredResource(
+      artifactStore.sessionLogUri(sessionId, 'stdout'),
+    );
+    final stderr = await artifactStore.readStoredResource(
+      artifactStore.sessionLogUri(sessionId, 'stderr'),
+    );
+    return <Map<String, Object?>>[
+      ..._parseErrors(stdout?.text ?? '', 'stdout'),
+      ..._parseErrors(stderr?.text ?? '', 'stderr'),
+    ];
+  }
+
+  Future<List<Map<String, Object?>>?> _tryOfficialRuntimeErrors(
+    String sessionId,
+  ) async {
+    final factory = delegateAdapterFactory;
+    final dtdUri = sessionStore.liveHandle(sessionId)?.dtdUri;
+    if (factory == null || dtdUri == null || dtdUri.isEmpty) {
+      return null;
+    }
+    try {
+      final adapter = await factory();
+      final health = await adapter.health();
+      if (!health.connected) {
+        return null;
+      }
+      final result = await adapter.getRuntimeErrors(dtdUri: dtdUri);
+      return _asList(result['errors'])
+          .map(_asMap)
+          .where((Map<String, Object?> item) => item.isNotEmpty)
+          .toList();
+    } on Object {
+      return null;
+    }
+  }
+
+  Future<Map<String, Object?>?> _tryOfficialWidgetTree({
+    required String sessionId,
+    required int depth,
+    required bool includeProperties,
+  }) async {
+    final factory = delegateAdapterFactory;
+    final dtdUri = sessionStore.liveHandle(sessionId)?.dtdUri;
+    if (factory == null || dtdUri == null || dtdUri.isEmpty) {
+      return null;
+    }
+    try {
+      final adapter = await factory();
+      final health = await adapter.health();
+      if (!health.connected) {
+        return null;
+      }
+      final result = await adapter.getWidgetTree(
+        dtdUri: dtdUri,
+        depth: depth,
+        includeProperties: includeProperties,
+      );
+      final tree = _asMap(result['tree']);
+      return tree.isEmpty ? null : tree;
+    } on Object {
+      return null;
+    }
+  }
+
   List<Map<String, Object?>> _parseErrors(String text, String stream) {
     final errors = <Map<String, Object?>>[];
     final lines = text.split('\n');
@@ -200,6 +301,29 @@ class RuntimeToolService {
       return _normalizeJson(decoded);
     }
     return <String, Object?>{};
+  }
+
+  Map<String, Object?> _asMap(Object? value) {
+    if (value is Map<String, Object?>) {
+      return value;
+    }
+    if (value is Map) {
+      return value.map<String, Object?>(
+        (Object? key, Object? nested) =>
+            MapEntry<String, Object?>(key.toString(), nested),
+      );
+    }
+    return <String, Object?>{};
+  }
+
+  List<Object?> _asList(Object? value) {
+    if (value is List<Object?>) {
+      return value;
+    }
+    if (value is List) {
+      return value.cast<Object?>();
+    }
+    return const <Object?>[];
   }
 
   Map<String, Object?> _trimTree(Map<String, Object?> node, int depth) {
