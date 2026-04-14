@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "flutterhelm": {
+      "command": "mise",
+      "args": [
+        "exec",
+        "--",
+        "dart",
+        "run",
+        "bin/flutterhelm.dart",
+        "serve"
+      ],
+      "note": "Stable repo-local FlutterHelm server. Companion MCP setup for runtime_interaction and native_build lives in plugin skills."
+    }
+  }
+}

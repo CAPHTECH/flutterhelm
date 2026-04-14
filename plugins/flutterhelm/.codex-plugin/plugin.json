@@ -1,0 +1,36 @@
+{
+  "name": "flutterhelm",
+  "version": "0.2.0",
+  "description": "Run FlutterHelm as a repo-local Codex plugin with stable local workflows and opt-in beta companion guidance.",
+  "author": {
+    "name": "FlutterHelm Contributors"
+  },
+  "license": "[TODO: choose-license]",
+  "keywords": [
+    "flutter",
+    "mcp",
+    "debugging",
+    "testing",
+    "orchestration"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "FlutterHelm",
+    "shortDescription": "Run stable FlutterHelm workflows and opt into beta companions",
+    "longDescription": "Use FlutterHelm as a repo-local plugin for stable Flutter workspace, session, run, test, profile, and native handoff workflows. The default plugin path starts only FlutterHelm; beta companion MCP setup for runtime interaction and native build lives in bundled skills.",
+    "developerName": "FlutterHelm",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use FlutterHelm to set up this repo and run a stable local debug and test loop",
+      "Use FlutterHelm to diagnose a failing run_app or test workflow in this repo",
+      "Show me how to enable FlutterHelm beta runtime interaction or native build safely"
+    ],
+    "brandColor": "#0175C2"
+  }
+}

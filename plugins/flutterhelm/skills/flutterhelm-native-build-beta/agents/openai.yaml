@@ -1,0 +1,4 @@
+interface:
+  display_name: "FlutterHelm Native Build Beta"
+  short_description: "Guide FlutterHelm native-build beta orchestration"
+  default_prompt: "Use $flutterhelm-native-build-beta to configure native_build with an XcodeBuildMCP-like provider and run a launch-plus-attach flow."

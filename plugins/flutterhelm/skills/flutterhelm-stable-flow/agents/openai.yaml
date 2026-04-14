@@ -1,0 +1,4 @@
+interface:
+  display_name: "FlutterHelm Stable Flow"
+  short_description: "Guide stable FlutterHelm setup and workflows"
+  default_prompt: "Use $flutterhelm-stable-flow to set up FlutterHelm and run a stable local debug/test/profile loop."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "FlutterHelm Runtime Interaction Beta"
+  short_description: "Enable FlutterHelm UI automation with mobile-mcp"
+  default_prompt: "Use $flutterhelm-beta-runtime-interaction to enable runtime_interaction with mobile-mcp and verify health."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "FlutterHelm Troubleshooting"
+  short_description: "Diagnose FlutterHelm failures and degraded states"
+  default_prompt: "Use $flutterhelm-troubleshooting to diagnose a FlutterHelm failure and decide the next remediation step."

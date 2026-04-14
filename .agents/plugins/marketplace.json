@@ -1,0 +1,20 @@
+{
+  "name": "flutterhelm-local",
+  "interface": {
+    "displayName": "FlutterHelm Local Plugins"
+  },
+  "plugins": [
+    {
+      "name": "flutterhelm",
+      "source": {
+        "source": "local",
+        "path": "./plugins/flutterhelm"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
