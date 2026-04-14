@@ -1,7 +1,6 @@
 import 'package:flutterhelm/config/config.dart';
 import 'package:flutterhelm/server/registry.dart';
 import 'package:flutterhelm/server/support_levels.dart';
-import 'package:flutterhelm/version.dart';
 
 Map<String, Object?> buildServerCapabilities({
   required ToolRegistry toolRegistry,
@@ -13,8 +12,6 @@ Map<String, Object?> buildServerCapabilities({
     'resources': <String, Object?>{'subscribe': false, 'listChanged': false},
     'tools': <String, Object?>{'listChanged': false},
     'experimental': <String, Object?>{
-      'releaseChannel': flutterHelmReleaseChannel,
-      'contractVersion': flutterHelmContractVersion,
       'stableLane': flutterHelmStableHarnessTags,
       'workflowStatus': toolRegistry.workflowStatus(config),
       'profiling': const <String, Object?>{
