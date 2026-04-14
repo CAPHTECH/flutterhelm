@@ -1,0 +1,28 @@
+{
+  "name": "flutterhelm-marketplace",
+  "owner": {
+    "name": "CAPHTECH"
+  },
+  "metadata": {
+    "description": "FlutterHelm plugin marketplace for Claude Code"
+  },
+  "plugins": [
+    {
+      "name": "flutterhelm",
+      "source": "./plugins/flutterhelm",
+      "description": "FlutterHelm plugin for stable Flutter workspace, session, run, test, profile, and native handoff workflows, with opt-in beta runtime interaction and native build guidance.",
+      "version": "0.2.0",
+      "author": {
+        "name": "CAPHTECH"
+      },
+      "keywords": [
+        "flutter",
+        "mcp",
+        "debugging",
+        "testing",
+        "orchestration"
+      ],
+      "category": "development"
+    }
+  ]
+}

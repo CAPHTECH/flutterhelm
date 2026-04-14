@@ -1,0 +1,9 @@
+{
+  "name": "flutterhelm",
+  "description": "Use FlutterHelm through the bundled npx wrapper for stable Flutter workflows and opt-in beta companion guidance.",
+  "version": "0.2.0",
+  "author": {
+    "name": "CAPHTECH"
+  },
+  "skills": "./skills/"
+}

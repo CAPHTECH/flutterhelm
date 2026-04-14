@@ -16,7 +16,7 @@ It adds **session management, safety controls, artifact/resource handling, compa
 - License: [MIT](LICENSE)
 - Public contract version: `0.2.0-stable`
 - Stable transport: `stdio`
-- Repo-local Codex plugin: [plugins/flutterhelm](plugins/flutterhelm)
+- Repo-local Codex / Claude plugin: [plugins/flutterhelm](plugins/flutterhelm)
 - Support levels:
   - `stable`: core FlutterHelm workflows
   - `beta`: `runtime_interaction`, custom `stdio_json` providers, `native_build`
@@ -154,7 +154,7 @@ If you already cloned the repository and want the local source path instead:
 }
 ```
 
-This repository also ships a repo-local Codex plugin. Its default `.mcp.json` starts only stable FlutterHelm. Beta companion MCPs remain opt-in through plugin skill references.
+This repository also ships repo-local Codex and Claude plugin manifests. Their default `.mcp.json` starts only stable FlutterHelm. Beta companion MCPs remain opt-in through plugin skill references.
 
 ## Local Development
 
